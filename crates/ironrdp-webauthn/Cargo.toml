@@ -1,0 +1,31 @@
+[package]
+name = "ironrdp-webauthn"
+version = "0.1.0"
+description = "RDPEWA dynamic channel for WebAuthN requests implemented as described in MS-RDPEWA"
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[features]
+default = []
+std = []
+
+[dependencies]
+ironrdp-dvc = { path = "../ironrdp-dvc", version = "0.2" } # public
+ironrdp-core = { path = "../ironrdp-core", version = "0.1", features = ["alloc"] }
+ironrdp-pdu = { path = "../ironrdp-pdu", version = "0.4", features = ["alloc"] } # public
+minicbor-serde = "0.4.1"
+slauth = "0.7.11"
+bitflags = "2.9.0"
+serde = { version = "1.0.219", features = ["derive"] }
+
+[lints]
+workspace = true

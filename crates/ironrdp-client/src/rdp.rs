@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use winit::event_loop::EventLoopProxy;
-
+use ironrdp::webauthn::client::WebAuthnClient;
 use crate::config::Config;
 
 #[derive(Debug)]
@@ -118,7 +118,9 @@ async fn connect(
     let mut connector = connector::ClientConnector::new(config.connector.clone())
         .with_server_addr(server_addr)
         .with_static_channel(
-            ironrdp::dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+            ironrdp::dvc::DrdynvcClient::new()
+                .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())))
+                .with_dynamic_channel(WebAuthnClient::new()),
         )
         .with_static_channel(rdpsnd::client::Rdpsnd::new(Box::new(cpal::RdpsndBackend::new())))
         .with_static_channel(rdpdr::Rdpdr::new(Box::new(NoopRdpdrBackend {}), "IronRDP".to_owned()).with_smartcard(0));
