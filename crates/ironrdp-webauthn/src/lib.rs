@@ -5,3 +5,4 @@ pub const CHANNEL_NAME: &str = "WebAuthN_Channel";
 
 pub mod client;
 pub mod request;
+pub mod response;

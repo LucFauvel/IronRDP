@@ -11,7 +11,7 @@ pub struct WebAuthnRequestMessage {
     #[serde(alias="transactionid")]
     pub transaction_id: Vec<u8>,
     pub web_auth_n_para: WebAuthnParameters,
-    pub cancellation_id: Vec<u8>
+    pub cancellation_id: Vec<u8>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +24,7 @@ pub struct WebAuthnParameters {
     pub user_verification: WebauthnUserVerificationRequirement,
     pub attestation_preference: WebauthnAttestationPreference,
     pub enterprise_attestation: WebauthnEnterpriseAttestation,
+    pub cancellation_id: Vec<u8>,
 }
 
 #[derive(Deserialize)]

@@ -182,9 +182,9 @@ Web-based frontend using `Svelte` and `Material` frameworks.
 
 Native CLIPRDR backend implementations.
 
-#### [`crates/ironrdp-webauthn`](./crates/ironrdp-rdpsnd)
+#### [`crates/ironrdp-webauthn`](./crates/ironrdp-webauthn)
 
-RDPEWA static channel for WebAuthN requests implemented as described in MS-RDPEWA.
+RDPEWA virutal channel for WebAuthN requests implemented as described in MS-RDPEWA.
 
 ### Internal Tier
 
