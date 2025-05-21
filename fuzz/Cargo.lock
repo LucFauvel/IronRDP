@@ -364,7 +364,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "thiserror",
- "yuvutils-rs",
+ "yuv",
 ]
 
 [[package]]
@@ -790,10 +790,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "yuvutils-rs"
-version = "0.8.1"
+name = "yuv"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45d853a7816ee95dd912b6345d93dd5f8e6165858d97484389955f6ce1cb1f37"
+checksum = "2d03c082fceb319b53bc35ddb2c8bf9c7f9a64f34090f18a0f05737def94c48d"
 dependencies = [
  "num-traits",
 ]
