@@ -42,6 +42,7 @@ ironrdp = { path = "../ironrdp", version = "0.13", features = [
     "rdpsnd",
     "cliprdr",
     "displaycontrol",
+    "webauthn",
     "connector",
 ] }
 ironrdp-core = { path = "../ironrdp-core", version = "0.1", features = ["alloc"] }

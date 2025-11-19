@@ -63,3 +63,7 @@ pub use ironrdp_session as session;
 #[cfg(feature = "svc")]
 #[doc(inline)]
 pub use ironrdp_svc as svc;
+
+#[cfg(feature = "webauthn")]
+#[doc(inline)]
+pub use ironrdp_webauthn as webauthn;

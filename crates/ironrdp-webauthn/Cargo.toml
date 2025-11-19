@@ -1,0 +1,55 @@
+[package]
+name = "ironrdp-webauthn"
+version = "0.1.0"
+readme = "README.md"
+description = "WebAuthn virtual channel (MS-RDPEWA) implementation"
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[features]
+default = ["std"]
+std = ["alloc", "ciborium/std", "serde/std", "ironrdp-core/std", "ironrdp-pdu/std"]
+alloc = ["serde/alloc", "ironrdp-core/alloc", "ironrdp-pdu/alloc"]
+
+[dependencies]
+ironrdp-core = { path = "../ironrdp-core", version = "0.1", default-features = false }
+ironrdp-dvc = { path = "../ironrdp-dvc", version = "0.4" }
+ironrdp-pdu = { path = "../ironrdp-pdu", version = "0.6", default-features = false }
+ironrdp-svc = { path = "../ironrdp-svc", version = "0.5" }
+tracing = { version = "0.1", features = ["log"] }
+
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_bytes = "0.11"
+ciborium = { version = "0.2.2", default-features = false }
+bitflags = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Navigator",
+    "CredentialsContainer",
+    "Credential",
+    "PublicKeyCredential",
+    "PublicKeyCredentialCreationOptions",
+    "PublicKeyCredentialRequestOptions",
+    "AuthenticatorResponse",
+    "AuthenticatorAttestationResponse",
+    "AuthenticatorAssertionResponse",
+] }

@@ -26,6 +26,8 @@ use ironrdp::pdu::rdp::capability_sets::client_codecs_capabilities;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{fast_path, ActiveStage, ActiveStageOutput, GracefulDisconnectReason};
+use ironrdp::webauthn::client::WebAuthnClient;
+use ironrdp::webauthn::pdu::{WebAuthnResponse, WebAuthnResponseData};
 use ironrdp_core::WriteBuf;
 use ironrdp_futures::{single_sequence_step_read, FramedWrite};
 use rgb::AsPixels as _;
@@ -68,6 +70,7 @@ struct SessionBuilderInner {
     force_clipboard_update_callback: Option<js_sys::Function>,
 
     use_display_control: bool,
+    use_webauthn_redirection: bool,
     enable_credssp: bool,
     outbound_message_size_limit: Option<usize>,
 }
@@ -96,6 +99,7 @@ impl Default for SessionBuilderInner {
             force_clipboard_update_callback: None,
 
             use_display_control: false,
+            use_webauthn_redirection: false,
             enable_credssp: true,
             outbound_message_size_limit: None,
         }
@@ -213,6 +217,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             |pcb: String| { self.0.borrow_mut().pcb = Some(pcb) };
             |kdc_proxy_url: String| { self.0.borrow_mut().kdc_proxy_url = Some(kdc_proxy_url) };
             |display_control: bool| { self.0.borrow_mut().use_display_control = display_control };
+            |webauthn_redirection: bool| { self.0.borrow_mut().use_webauthn_redirection = webauthn_redirection };
             |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
             |outbound_message_size_limit: f64| {
                 let limit = if outbound_message_size_limit >= 0.0 && outbound_message_size_limit <= f64::from(u32::MAX) {
@@ -324,6 +329,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
         }
 
         let use_display_control = self.0.borrow().use_display_control;
+        let use_webauthn_redirection = self.0.borrow().use_webauthn_redirection;
 
         let (connection_result, ws) = connect(ConnectParams {
             ws,
@@ -334,6 +340,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
             kdc_proxy_url,
             clipboard_backend: clipboard.as_ref().map(|clip| clip.backend()),
             use_display_control,
+            use_webauthn_redirection,
         })
         .await?;
 
@@ -943,6 +950,7 @@ struct ConnectParams {
     kdc_proxy_url: Option<String>,
     clipboard_backend: Option<WasmClipboardBackend>,
     use_display_control: bool,
+    use_webauthn_redirection: bool,
 }
 
 async fn connect(
@@ -955,6 +963,7 @@ async fn connect(
         kdc_proxy_url,
         clipboard_backend,
         use_display_control,
+        use_webauthn_redirection,
     }: ConnectParams,
 ) -> Result<(connector::ConnectionResult, WebSocket), IronError> {
     let mut framed = ironrdp_futures::LocalFuturesFramed::new(ws);
@@ -968,10 +977,34 @@ async fn connect(
         connector.attach_static_channel(CliprdrClient::new(Box::new(clipboard_backend)));
     }
 
+    let mut drdynvc = DrdynvcClient::new();
+    let mut drdynvc_needed = false;
+
     if use_display_control {
-        connector.attach_static_channel(
-            DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
-        );
+        drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+        drdynvc_needed = true;
+    }
+
+    if use_webauthn_redirection {
+        #[cfg(target_family = "wasm")]
+        {
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new_default());
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new(|req| {
+                warn!("Received WebAuthn request: {:?}", req);
+                Ok(WebAuthnResponse {
+                    hresult: 0x80004001,                         // E_NOTIMPL
+                    data: WebAuthnResponseData::CancelCurrentOp, // 0 bytes payload
+                })
+            }));
+        }
+        drdynvc_needed = true;
+    }
+
+    if drdynvc_needed {
+        connector.attach_static_channel(drdynvc);
     }
 
     let (upgraded, server_public_key) =

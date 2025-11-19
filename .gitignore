@@ -10,6 +10,9 @@
 # Coverage
 /docs/coverage
 
+# LLM agents plans
+/docs/plans
+
 # Editor/IDE files
 *~
 /tags

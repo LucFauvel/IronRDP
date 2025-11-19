@@ -32,6 +32,10 @@ export function displayControl(enable: boolean): Extension {
     return new Extension('display_control', enable);
 }
 
+export function webauthnRedirection(enable: boolean): Extension {
+    return new Extension('webauthn_redirection', enable);
+}
+
 export function kdcProxyUrl(url: string): Extension {
     return new Extension('kdc_proxy_url', url);
 }

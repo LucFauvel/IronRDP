@@ -13,6 +13,8 @@ use ironrdp::pdu::{pdu_other_err, PduResult};
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{fast_path, ActiveStage, ActiveStageOutput, GracefulDisconnectReason, SessionResult};
 use ironrdp::svc::SvcMessage;
+use ironrdp::webauthn::client::WebAuthnClient;
+use ironrdp::webauthn::pdu::{WebAuthnResponse, WebAuthnResponseData};
 use ironrdp::{cliprdr, connector, rdpdr, rdpsnd, session};
 use ironrdp_core::WriteBuf;
 use ironrdp_dvc_pipe_proxy::DvcNamedPipeProxy;
@@ -196,8 +198,26 @@ async fn connect(
     };
     let mut framed = ironrdp_tokio::TokioFramed::new(stream);
 
-    let mut drdynvc =
-        ironrdp::dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    let mut drdynvc = ironrdp::dvc::DrdynvcClient::new()
+        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+
+    if config.enable_webauthn {
+        #[cfg(windows)]
+        {
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new_default());
+        }
+        #[cfg(not(windows))]
+        {
+            warn!("WebAuthn redirection enabled but not supported on this platform");
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new(|req| {
+                warn!("Received WebAuthn request: {:?}", req);
+                Ok(WebAuthnResponse {
+                    hresult: 0x80004001,                         // E_NOTIMPL
+                    data: WebAuthnResponseData::CancelCurrentOp, // 0 bytes payload
+                })
+            }));
+        }
+    }
 
     // Instantiate all DVC proxies
     for proxy in config.dvc_pipe_proxies.iter() {
@@ -287,8 +307,26 @@ async fn connect_ws(
 
     let mut framed = ironrdp_tokio::TokioFramed::new(ws);
 
-    let mut drdynvc =
-        ironrdp::dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    let mut drdynvc = ironrdp::dvc::DrdynvcClient::new()
+        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+
+    if config.enable_webauthn {
+        #[cfg(windows)]
+        {
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new_default());
+        }
+        #[cfg(not(windows))]
+        {
+            warn!("WebAuthn redirection enabled but not supported on this platform");
+            drdynvc = drdynvc.with_dynamic_channel(WebAuthnClient::new(|req| {
+                warn!("Received WebAuthn request: {:?}", req);
+                Ok(WebAuthnResponse {
+                    hresult: 0x80004001,                         // E_NOTIMPL
+                    data: WebAuthnResponseData::CancelCurrentOp, // 0 bytes payload
+                })
+            }));
+        }
+    }
 
     // Instantiate all DVC proxies
     for proxy in config.dvc_pipe_proxies.iter() {

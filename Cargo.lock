@@ -2356,6 +2356,7 @@ dependencies = [
  "ironrdp-server",
  "ironrdp-session",
  "ironrdp-svc",
+ "ironrdp-webauthn",
  "opus2",
  "pico-args",
  "rand 0.9.2",
@@ -2895,6 +2896,26 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "x509-cert",
+]
+
+[[package]]
+name = "ironrdp-webauthn"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.9.4",
+ "ciborium",
+ "ironrdp-core",
+ "ironrdp-dvc",
+ "ironrdp-pdu",
+ "ironrdp-svc",
+ "js-sys",
+ "serde",
+ "serde_bytes",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.62.2",
 ]
 
 [[package]]
