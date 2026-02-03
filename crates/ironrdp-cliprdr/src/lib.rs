@@ -15,8 +15,8 @@ use ironrdp_svc::{
 };
 use pdu::{
     Capabilities, ClientTemporaryDirectory, ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags,
-    ClipboardPdu, ClipboardProtocolVersion, FileContentsResponse, FormatDataRequest, FormatListResponse,
-    OwnedFormatDataResponse,
+    ClipboardPdu, ClipboardProtocolVersion, FileContentsRequest, FileContentsResponse, FormatDataRequest,
+    FormatListResponse, LockDataId, OwnedFormatDataResponse,
 };
 use tracing::{error, info};
 
@@ -230,26 +230,32 @@ impl<R: Role> Cliprdr<R> {
     pub fn initiate_copy(&self, available_formats: &[ClipboardFormat]) -> PduResult<CliprdrSvcMessages<R>> {
         let mut pdus = Vec::new();
 
-        match (self.state, R::is_server()) {
-            // When user initiates copy, we should send format list to server.
-            (CliprdrState::Ready, _) => {
-                pdus.push(ClipboardPdu::FormatList(
-                    self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
-                ));
-            }
-            (CliprdrState::Initialization, false) => {
-                // During initialization state, first copy action is synthetic and should be sent along with
-                // capabilities and temporary directory PDUs.
-                pdus.push(ClipboardPdu::Capabilities(self.capabilities.clone()));
-                pdus.push(ClipboardPdu::TemporaryDirectory(
-                    ClientTemporaryDirectory::new(self.backend.temporary_directory()).map_err(|e| encode_err!(e))?,
-                ));
-                pdus.push(ClipboardPdu::FormatList(
-                    self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
-                ));
-            }
-            _ => {
-                error!(?self.state, "Attempted to initiate copy in incorrect state");
+        if R::is_server() {
+            pdus.push(ClipboardPdu::FormatList(
+                self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
+            ));
+        } else {
+            match self.state {
+                CliprdrState::Ready => {
+                    pdus.push(ClipboardPdu::FormatList(
+                        self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
+                    ));
+                }
+                CliprdrState::Initialization => {
+                    // During initialization state, first copy action is synthetic and should be sent along with
+                    // capabilities and temporary directory PDUs.
+                    pdus.push(ClipboardPdu::Capabilities(self.capabilities.clone()));
+                    pdus.push(ClipboardPdu::TemporaryDirectory(
+                        ClientTemporaryDirectory::new(self.backend.temporary_directory())
+                            .map_err(|e| encode_err!(e))?,
+                    ));
+                    pdus.push(ClipboardPdu::FormatList(
+                        self.build_format_list(available_formats).map_err(|e| encode_err!(e))?,
+                    ));
+                }
+                _ => {
+                    error!(?self.state, "Attempted to initiate copy in incorrect state");
+                }
             }
         }
 
@@ -268,6 +274,46 @@ impl<R: Role> Cliprdr<R> {
             format: requested_format,
         });
 
+        Ok(vec![into_cliprdr_message(pdu)].into())
+    }
+
+    /// [2.2.4.6] Lock Clipboard Data PDU (CLIPRDR_LOCK_CLIPDATA)
+    ///
+    /// Locks clipboard data on the remote before file transfer. Should be called before
+    /// requesting file contents to ensure data stability during transfer.
+    ///
+    /// [2.2.4.6]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeclip/150bac72-bc7f-42e5-9e8e-cb5a0ddc7dbc
+    pub fn lock_clipboard(&self, clip_data_id: u32) -> PduResult<CliprdrSvcMessages<R>> {
+        ready_guard!(self, lock_clipboard);
+
+        let pdu = ClipboardPdu::LockData(LockDataId(clip_data_id));
+        Ok(vec![into_cliprdr_message(pdu)].into())
+    }
+
+    /// [2.2.4.7] Unlock Clipboard Data PDU (CLIPRDR_UNLOCK_CLIPDATA)
+    ///
+    /// Unlocks previously locked clipboard data. Should be called after file transfer
+    /// operations complete.
+    ///
+    /// [2.2.4.7]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeclip/e587a20c-fb7c-47d1-8698-4bcb92c48a38
+    pub fn unlock_clipboard(&self, clip_data_id: u32) -> PduResult<CliprdrSvcMessages<R>> {
+        ready_guard!(self, unlock_clipboard);
+
+        let pdu = ClipboardPdu::UnlockData(LockDataId(clip_data_id));
+        Ok(vec![into_cliprdr_message(pdu)].into())
+    }
+
+    /// [2.2.5.3] File Contents Request PDU (CLIPRDR_FILECONTENTS_REQUEST)
+    ///
+    /// Requests file contents from the Shared Clipboard Owner. Should be called when
+    /// the Local Clipboard Owner needs file data after receiving a file list format.
+    /// The remote will respond via [`CliprdrBackend::on_file_contents_response`].
+    ///
+    /// [2.2.5.3]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeclip/cbc851d3-4e68-45f4-9292-26872a9209f2
+    pub fn request_file_contents(&self, request: FileContentsRequest) -> PduResult<CliprdrSvcMessages<R>> {
+        ready_guard!(self, request_file_contents);
+
+        let pdu = ClipboardPdu::FileContentsRequest(request);
         Ok(vec![into_cliprdr_message(pdu)].into())
     }
 }

@@ -49,7 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Use CDN URLs instead of the blob storage URLs for Devolutions logo (#631) ([dd249909a8](https://github.com/Devolutions/IronRDP/commit/dd249909a894004d4f728d30b3a4aa77a0f8193b)) 
 
-
 ## [[0.1.1](https://github.com/Devolutions/IronRDP/compare/ironrdp-rdpsnd-native-v0.1.0...ironrdp-rdpsnd-native-v0.1.1)] - 2024-12-15
 
 ### Other

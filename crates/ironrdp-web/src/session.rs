@@ -533,6 +533,22 @@ impl iron_remote_desktop::Session for Session {
                                         cliprdr.initiate_paste(format)
                                             .context("CLIPRDR initiate paste")?
                                     ),
+                                    ClipboardMessage::SendLockClipboard { clip_data_id } => Some(
+                                        cliprdr.lock_clipboard(clip_data_id)
+                                            .context("CLIPRDR lock clipboard")?
+                                    ),
+                                    ClipboardMessage::SendUnlockClipboard { clip_data_id } => Some(
+                                        cliprdr.unlock_clipboard(clip_data_id)
+                                            .context("CLIPRDR unlock clipboard")?
+                                    ),
+                                    ClipboardMessage::SendFileContentsRequest(request) => Some(
+                                        cliprdr.request_file_contents(request)
+                                            .context("CLIPRDR request file contents")?
+                                    ),
+                                    ClipboardMessage::SendFileContentsResponse(response) => Some(
+                                        cliprdr.submit_file_contents(response)
+                                            .context("CLIPRDR submit file contents")?
+                                    ),
                                     ClipboardMessage::Error(e) => {
                                         error!("Clipboard backend error: {}", e);
                                         None
@@ -1012,11 +1028,11 @@ async fn connect(
 
     let connection_result = ironrdp_futures::connect_finalize(
         upgraded,
-        &mut framed,
         connector,
+        &mut framed,
+        &mut WasmNetworkClient,
         (&destination).into(),
         server_public_key,
-        Some(&mut WasmNetworkClient),
         url::Url::parse(kdc_proxy_url.unwrap_or_default().as_str()) // if kdc_proxy_url does not exit, give url parser a empty string, it will fail anyway and map to a None
             .ok()
             .map(|url| KerberosConfig {

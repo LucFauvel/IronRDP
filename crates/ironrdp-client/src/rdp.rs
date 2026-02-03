@@ -249,7 +249,7 @@ async fn connect(
     // Ensure there is no leftover
     let (initial_stream, leftover_bytes) = framed.into_inner();
 
-    let (upgraded_stream, server_public_key) = ironrdp_tls::upgrade(initial_stream, config.destination.name())
+    let (upgraded_stream, tls_cert) = ironrdp_tls::upgrade(initial_stream, config.destination.name())
         .await
         .map_err(|e| connector::custom_err!("TLS upgrade", e))?;
 
@@ -258,13 +258,15 @@ async fn connect(
     let erased_stream: Box<dyn AsyncReadWrite + Unpin + Send + Sync> = Box::new(upgraded_stream);
     let mut upgraded_framed = ironrdp_tokio::TokioFramed::new_with_leftover(erased_stream, leftover_bytes);
 
+    let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
+        .ok_or_else(|| connector::general_err!("unable to extract tls server public key"))?;
     let connection_result = ironrdp_tokio::connect_finalize(
         upgraded,
-        &mut upgraded_framed,
         connector,
+        &mut upgraded_framed,
+        &mut ReqwestNetworkClient::new(),
         (&config.destination).into(),
-        server_public_key,
-        Some(&mut ReqwestNetworkClient::new()),
+        server_public_key.to_owned(),
         None,
     )
     .await?;
@@ -364,11 +366,11 @@ async fn connect_ws(
 
     let connection_result = ironrdp_tokio::connect_finalize(
         upgraded,
-        &mut framed,
         connector,
+        &mut framed,
+        &mut ReqwestNetworkClient::new(),
         (&config.destination).into(),
         server_public_key,
-        Some(&mut ReqwestNetworkClient::new()),
         None,
     )
     .await?;
@@ -599,6 +601,22 @@ async fn active_session(
                                 }
                                 ClipboardMessage::SendInitiatePaste(format) => {
                                     Some(cliprdr.initiate_paste(format)
+                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
+                                }
+                                ClipboardMessage::SendLockClipboard { clip_data_id } => {
+                                    Some(cliprdr.lock_clipboard(clip_data_id)
+                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
+                                }
+                                ClipboardMessage::SendUnlockClipboard { clip_data_id } => {
+                                    Some(cliprdr.unlock_clipboard(clip_data_id)
+                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
+                                }
+                                ClipboardMessage::SendFileContentsRequest(request) => {
+                                    Some(cliprdr.request_file_contents(request)
+                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
+                                }
+                                ClipboardMessage::SendFileContentsResponse(response) => {
+                                    Some(cliprdr.submit_file_contents(response)
                                         .map_err(|e| session::custom_err!("CLIPRDR", e))?)
                                 }
                                 ClipboardMessage::Error(e) => {
