@@ -757,6 +757,7 @@ impl iron_remote_desktop::Session for Session {
                                         user_channel_id,
                                         enable_server_pointer,
                                         pointer_software_rendering,
+                                        bulk_decompressor: None,
                                     }
                                     .build(),
                                 );
@@ -764,6 +765,13 @@ impl iron_remote_desktop::Session for Session {
                                 break 'activation_seq;
                             }
                         }
+                    }
+                    ActiveStageOutput::MultitransportRequest(pdu) => {
+                        debug!(
+                            request_id = pdu.request_id,
+                            requested_protocol = ?pdu.requested_protocol,
+                            "Multitransport request received (UDP transport not implemented)"
+                        );
                     }
                     ActiveStageOutput::Terminate(reason) => break 'outer reason,
                 }
@@ -906,16 +914,20 @@ fn build_config(
         // https://github.com/FreeRDP/FreeRDP/blob/4e24b966c86fdf494a782f0dfcfc43a057a2ea60/libfreerdp/core/settings.c#LL49C34-L49C70
         client_dir: "C:\\Windows\\System32\\mstscax.dll".to_owned(),
         platform: ironrdp::pdu::rdp::capability_sets::MajorPlatformType::UNSPECIFIED,
+        compression_type: None,
         enable_server_pointer: false,
         autologon: false,
         enable_audio_playback: false,
         request_data: None,
         pointer_software_rendering: false,
+        multitransport_flags: None,
         performance_flags: PerformanceFlags::default(),
         desktop_scale_factor: 0,
         hardware_id: None,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
+        alternate_shell: String::new(),
+        work_dir: String::new(),
     }
 }
 

@@ -22,10 +22,8 @@ alloc = ["serde/alloc", "ironrdp-core/alloc", "ironrdp-pdu/alloc"]
 
 [dependencies]
 ironrdp-core = { path = "../ironrdp-core", version = "0.1", default-features = false }
-ironrdp-dvc = { path = "../ironrdp-dvc", version = "0.4" }
-ironrdp-pdu = { path = "../ironrdp-pdu", version = "0.6", default-features = false }
-ironrdp-svc = { path = "../ironrdp-svc", version = "0.5" }
-tracing = { version = "0.1", features = ["log"] }
+ironrdp-dvc = { path = "../ironrdp-dvc", version = "0.5" }
+ironrdp-pdu = { path = "../ironrdp-pdu", version = "0.7", default-features = false }
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_bytes = "0.11"

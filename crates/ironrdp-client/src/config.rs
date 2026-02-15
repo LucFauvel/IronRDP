@@ -33,6 +33,13 @@ pub struct Config {
     /// server, which will be used for proxying DVC messages to/from user-defined DVC logic
     /// implemented as named pipe clients (either in the same process or in a different process).
     pub dvc_pipe_proxies: Vec<DvcProxyInfo>,
+
+    /// Paths to DVC client plugin DLLs to load (Windows only).
+    ///
+    /// Each DLL is loaded via `LoadLibraryW` and its `VirtualChannelGetInstance` export is called
+    /// to obtain DVC plugin COM objects. Example: `C:\Windows\System32\webauthn.dll`.
+    #[cfg(windows)]
+    pub dvc_plugins: Vec<PathBuf>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -42,6 +49,18 @@ pub enum ClipboardType {
     #[cfg(windows)]
     Windows,
     None,
+}
+
+fn compression_type_from_level(level: u32) -> anyhow::Result<ironrdp::pdu::rdp::client_info::CompressionType> {
+    use ironrdp::pdu::rdp::client_info::CompressionType;
+
+    match level {
+        0 => Ok(CompressionType::K8),
+        1 => Ok(CompressionType::K64),
+        2 => Ok(CompressionType::Rdp6),
+        3 => Ok(CompressionType::Rdp61),
+        _ => anyhow::bail!("Invalid compression level. Valid values are 0, 1, 2, 3."),
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -293,6 +312,24 @@ struct Args {
     #[clap(long, num_args = 1.., value_delimiter = ',')]
     codecs: Vec<String>,
 
+    /// Enable bulk compression support (default: true).
+    ///
+    /// When enabled, the client advertises support for bulk compression and the
+    /// server may send compressed PDUs. Use `--compression-enabled=false` to
+    /// disable.
+    #[clap(long, default_value_t = true, action = clap::ArgAction::Set)]
+    compression_enabled: bool,
+
+    /// Bulk compression level to negotiate with the server.
+    ///
+    /// Valid values:
+    ///   0 — MPPC with 8 KB history (RDP 4.0)
+    ///   1 — MPPC with 64 KB history (RDP 5.0)
+    ///   2 — NCRUSH (RDP 6.0)
+    ///   3 — XCRUSH (RDP 6.1)
+    #[clap(long, value_parser = clap::value_parser!(u32).range(0..=3), default_value_t = 3)]
+    compression_level: u32,
+
     /// Add DVC channel named pipe proxy
     ///
     /// The format is `<name>=<pipe>`, e.g., `ChannelName=PipeName` where `ChannelName` is the name of the channel,
@@ -300,6 +337,13 @@ struct Args {
     /// `<pipe>` will automatically be prefixed with `\\.\pipe\` on Windows.
     #[clap(long)]
     dvc_proxy: Vec<DvcProxyInfo>,
+    /// Load a DVC client plugin DLL (Windows only).
+    ///
+    /// Path to a DVC plugin DLL that exports VirtualChannelGetInstance.
+    /// Example: C:\Windows\System32\webauthn.dll
+    #[cfg(windows)]
+    #[clap(long)]
+    dvc_plugin: Vec<PathBuf>,
 }
 
 impl Config {
@@ -426,6 +470,12 @@ impl Config {
             args.clipboard_type
         };
 
+        let compression_type = if args.compression_enabled {
+            Some(compression_type_from_level(args.compression_level)?)
+        } else {
+            None
+        };
+
         let connector = connector::Config {
             credentials: Credentials::UsernamePassword { username, password },
             domain: args.domain,
@@ -466,8 +516,12 @@ impl Config {
             enable_audio_playback: true,
             request_data: None,
             pointer_software_rendering: false,
+            multitransport_flags: None,
+            compression_type,
             performance_flags: PerformanceFlags::default(),
             timezone_info: TimezoneInfo::default(),
+            alternate_shell: String::new(),
+            work_dir: String::new(),
         };
 
         let rdcleanpath = args
@@ -483,6 +537,8 @@ impl Config {
             clipboard_type,
             rdcleanpath,
             dvc_pipe_proxies: args.dvc_proxy,
+            #[cfg(windows)]
+            dvc_plugins: args.dvc_plugin,
             enable_webauthn: args.enable_webauthn,
         })
     }
