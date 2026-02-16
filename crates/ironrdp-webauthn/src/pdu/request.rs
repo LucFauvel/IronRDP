@@ -75,8 +75,8 @@ pub struct WebAuthnChannelRequest {
     #[serde(rename = "timeout")]
     pub timeout_ms: u32,
 
-    // "transactionid": GUID for the transaction
-    #[serde(rename = "transactionid", with = "serde_bytes")]
+    // "transactionId": GUID for the transaction
+    #[serde(rename = "transactionId", with = "serde_bytes")]
     pub transaction_id: Vec<u8>, // expect 16 bytes
 
     // "webAuthNPara": optional parameter map

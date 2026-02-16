@@ -24,7 +24,6 @@ pub struct Config {
     pub destination: Destination,
     pub connector: connector::Config,
     pub clipboard_type: ClipboardType,
-    pub enable_webauthn: bool,
     pub rdcleanpath: Option<RDCleanPathConfig>,
 
     /// DVC channel <-> named pipe proxy configuration.
@@ -300,10 +299,6 @@ struct Args {
     #[clap(long)]
     no_credssp: bool,
 
-    /// Enable WebAuthn redirection
-    #[clap(long)]
-    enable_webauthn: bool,
-
     /// The clipboard type
     #[clap(long, value_enum, default_value_t = ClipboardType::Default)]
     clipboard_type: ClipboardType,
@@ -539,7 +534,6 @@ impl Config {
             dvc_pipe_proxies: args.dvc_proxy,
             #[cfg(windows)]
             dvc_plugins: args.dvc_plugin,
-            enable_webauthn: args.enable_webauthn,
         })
     }
 }

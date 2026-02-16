@@ -127,7 +127,11 @@ impl SvcProcessor for DrdynvcClient {
                     responses.push(self.create_capabilities_response());
                 }
 
+                debug!("Server requested DVC channel: {:?}", channel_name);
+                let registered_names: Vec<_> = self.dynamic_channels.values().map(|ch| ch.channel_name()).collect();
+                debug!("Registered channels: {:?}", registered_names);
                 let channel_exists = self.dynamic_channels.get_by_channel_name(&channel_name).is_some();
+                debug!("Channel exists: {}, will respond with status: {:?}", channel_exists, if channel_exists { "OK" } else { "NO_LISTENER" });
                 let (creation_status, start_messages) = if channel_exists {
                     // If we have a handler for this channel, attach the channel ID
                     // and get any start messages.

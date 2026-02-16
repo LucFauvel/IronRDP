@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use ironrdp_core::impl_as_any;
 use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
 use ironrdp_pdu::PduResult;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::pdu::{WebAuthnChannelRequest, WebAuthnResponse, WebAuthnResponsePdu};
 use crate::CHANNEL_NAME;
@@ -50,7 +50,12 @@ impl DvcProcessor for WebAuthnClient {
     fn process(&mut self, _channel_id: u32, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
         // ciborium::de::from_reader requires std::io::Read, which &[u8] implements in std.
         // Since this crate currently targets std (based on ironrdp-displaycontrol precedent), this works.
-        let req: WebAuthnChannelRequest = ciborium::de::from_reader(payload).map_err(|_e| {
+        debug!("Received WebAuthN payload: {} bytes", payload.len());
+        debug!("Raw payload hex: {}", hex::encode(payload));
+
+        let req: WebAuthnChannelRequest = ciborium::de::from_reader(payload).map_err(|e| {
+            error!("CBOR decode error: {:?}", e);
+            error!("Failed to decode {} bytes: {}", payload.len(), hex::encode(payload));
             ironrdp_pdu::PduError::new(
                 "WebAuthnClient",
                 ironrdp_pdu::PduErrorKind::Other {

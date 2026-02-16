@@ -28,11 +28,15 @@ ironrdp-pdu = { path = "../ironrdp-pdu", version = "0.7", default-features = fal
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_bytes = "0.11"
 ciborium = { version = "0.2.2", default-features = false }
+serde_cbor = "0.11"
 bitflags = "2"
+tracing = { version = "0.1", features = ["log"] }
+hex = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Networking_WindowsWebServices",
 ] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
