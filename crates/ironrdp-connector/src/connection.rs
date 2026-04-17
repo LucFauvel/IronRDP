@@ -3,9 +3,9 @@ use core::net::SocketAddr;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use ironrdp_core::{decode, encode_vec, Encode, WriteBuf};
+use ironrdp_core::{Encode, WriteBuf, decode, encode_vec};
 use ironrdp_pdu::x224::X224;
-use ironrdp_pdu::{gcc, mcs, nego, rdp, PduHint};
+use ironrdp_pdu::{PduHint, gcc, mcs, nego, rdp};
 use ironrdp_svc::{StaticChannelSet, StaticVirtualChannel, SvcClientProcessor};
 use tracing::{debug, error, info, warn};
 
@@ -13,8 +13,8 @@ use crate::channel_connection::{ChannelConnectionSequence, ChannelConnectionStat
 use crate::connection_activation::{ConnectionActivationSequence, ConnectionActivationState};
 use crate::license_exchange::{LicenseExchangeSequence, NoopLicenseCache};
 use crate::{
-    encode_x224_packet, general_err, reason_err, Config, ConnectorError, ConnectorErrorExt as _, ConnectorErrorKind,
-    ConnectorResult, DesktopSize, NegotiationFailure, Sequence, State, Written,
+    Config, ConnectorError, ConnectorErrorExt as _, ConnectorErrorKind, ConnectorResult, DesktopSize,
+    NegotiationFailure, Sequence, State, Written, encode_x224_packet, general_err, reason_err,
 };
 
 #[derive(Debug)]
@@ -22,6 +22,7 @@ use crate::{
 pub struct ConnectionResult {
     pub io_channel_id: u16,
     pub user_channel_id: u16,
+    pub share_id: u32,
     pub static_channels: StaticChannelSet,
     pub desktop_size: DesktopSize,
     pub enable_server_pointer: bool,
@@ -235,7 +236,7 @@ impl Sequence for ClientConnector {
         let (written, next_state) = match mem::take(&mut self.state) {
             // Invalid state
             ClientConnectorState::Consumed => {
-                return Err(general_err!("connector sequence state is consumed (this is a bug)",))
+                return Err(general_err!("connector sequence state is consumed (this is a bug)",));
             }
 
             //== Connection Initiation ==//
@@ -580,12 +581,14 @@ impl Sequence for ClientConnector {
                             io_channel_id,
                             user_channel_id,
                             desktop_size,
+                            share_id,
                             enable_server_pointer,
                             pointer_software_rendering,
                         } => ClientConnectorState::Connected {
                             result: ConnectionResult {
                                 io_channel_id,
                                 user_channel_id,
+                                share_id,
                                 static_channels: mem::take(&mut self.static_channels),
                                 desktop_size,
                                 enable_server_pointer,
@@ -654,7 +657,7 @@ fn create_gcc_blocks<'a>(
             return Err(reason_err!(
                 "create gcc blocks",
                 "unsupported color depth: {max_color_depth}"
-            ))
+            ));
         }
     };
 
@@ -736,12 +739,12 @@ fn create_gcc_blocks<'a>(
 }
 
 fn create_client_info_pdu(config: &Config, client_addr: &SocketAddr) -> rdp::ClientInfoPdu {
+    use ironrdp_pdu::rdp::ClientInfoPdu;
     use ironrdp_pdu::rdp::client_info::{
         AddressFamily, ClientInfo, ClientInfoFlags, CompressionType, Credentials, ExtendedClientInfo,
         ExtendedClientOptionalInfo,
     };
     use ironrdp_pdu::rdp::headers::{BasicSecurityHeader, BasicSecurityHeaderFlags};
-    use ironrdp_pdu::rdp::ClientInfoPdu;
 
     let security_header = BasicSecurityHeader {
         flags: BasicSecurityHeaderFlags::INFO_PKT,

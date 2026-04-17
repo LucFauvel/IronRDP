@@ -4,15 +4,15 @@ mod tests;
 use bit_field::BitField as _;
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, decode_cursor, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeError,
-    DecodeResult, Encode, EncodeResult, InvalidFieldErr as _, ReadCursor, WriteCursor,
+    Decode, DecodeError, DecodeResult, Encode, EncodeResult, InvalidFieldErr as _, ReadCursor, WriteCursor,
+    cast_length, decode_cursor, ensure_fixed_part_size, ensure_size, invalid_field_err,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
 
 use super::bitmap::BitmapUpdateData;
 use super::pointer::PointerUpdateData;
-use super::surface_commands::{SurfaceCommand, SURFACE_COMMAND_HEADER_SIZE};
+use super::surface_commands::{SURFACE_COMMAND_HEADER_SIZE, SurfaceCommand};
 use crate::per;
 use crate::rdp::client_info::CompressionType;
 use crate::rdp::headers::{CompressionFlags, SHARE_DATA_HEADER_COMPRESSION_MASK};
@@ -90,7 +90,7 @@ impl<'de> Decode<'de> for FastPathHeader {
         ensure_fixed_part_size!(in: src);
 
         let header = src.read_u8();
-        let flags = EncryptionFlags::from_bits_truncate(header.get_bits(6..8));
+        let flags = EncryptionFlags::from_bits_retain(header.get_bits(6..8));
 
         let (length, sizeof_length) = per::read_length(src).map_err(|e| {
             DecodeError::invalid_field("", "length", "Invalid encoded fast path PDU length").with_source(e)
@@ -180,7 +180,7 @@ impl<'de> Decode<'de> for FastPathUpdatePdu<'de> {
         let fragmentation = Fragmentation::from_u8(fragmentation)
             .ok_or_else(|| invalid_field_err!("updateHeader", "Invalid fragmentation"))?;
 
-        let compression = Compression::from_bits_truncate(header.get_bits(6..8));
+        let compression = Compression::from_bits_retain(header.get_bits(6..8));
 
         let (compression_flags, compression_type) = if compression.contains(Compression::COMPRESSION_USED) {
             let expected_size = 1 /* flags_with_type */ + 2 /* len */;
@@ -188,7 +188,7 @@ impl<'de> Decode<'de> for FastPathUpdatePdu<'de> {
 
             let compression_flags_with_type = src.read_u8();
             let compression_flags =
-                CompressionFlags::from_bits_truncate(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
+                CompressionFlags::from_bits_retain(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
             let compression_type =
                 CompressionType::from_u8(compression_flags_with_type & SHARE_DATA_HEADER_COMPRESSION_MASK)
                     .ok_or_else(|| invalid_field_err!("compressionFlags", "invalid compression type"))?;
@@ -221,6 +221,10 @@ pub enum FastPathUpdate<'a> {
     SurfaceCommands(Vec<SurfaceCommand<'a>>),
     Bitmap(BitmapUpdateData<'a>),
     Pointer(PointerUpdateData<'a>),
+    /// Raw palette update data (TS_UPDATE_PALETTE_DATA).
+    /// Layout: pad(2) + numberColors(u32) + N x TS_COLOR_QUAD [B, G, R, pad].
+    /// See MS-RDPBCGR 2.2.9.1.1.3.1.1.
+    Palette(&'a [u8]),
 }
 
 impl<'a> FastPathUpdate<'a> {
@@ -242,6 +246,11 @@ impl<'a> FastPathUpdate<'a> {
                 Ok(Self::SurfaceCommands(commands))
             }
             UpdateCode::Bitmap => Ok(Self::Bitmap(decode_cursor(src)?)),
+            UpdateCode::Palette => {
+                let data = src.remaining();
+                src.advance(data.len());
+                Ok(Self::Palette(data))
+            }
             UpdateCode::HiddenPointer => Ok(Self::Pointer(PointerUpdateData::SetHidden)),
             UpdateCode::DefaultPointer => Ok(Self::Pointer(PointerUpdateData::SetDefault)),
             UpdateCode::PositionPointer => Ok(Self::Pointer(PointerUpdateData::SetPosition(decode_cursor(src)?))),
@@ -261,6 +270,7 @@ impl<'a> FastPathUpdate<'a> {
             Self::SurfaceCommands(_) => "Surface Commands",
             Self::Bitmap(_) => "Bitmap",
             Self::Pointer(_) => "Pointer",
+            Self::Palette(_) => "Palette",
         }
     }
 }
@@ -287,6 +297,9 @@ impl Encode for FastPathUpdate<'_> {
                 PointerUpdateData::New(inner) => inner.encode(dst)?,
                 PointerUpdateData::Large(inner) => inner.encode(dst)?,
             },
+            Self::Palette(data) => {
+                dst.write_slice(data);
+            }
         }
 
         Ok(())
@@ -300,6 +313,7 @@ impl Encode for FastPathUpdate<'_> {
         match self {
             Self::SurfaceCommands(commands) => commands.iter().map(|c| c.size()).sum::<usize>(),
             Self::Bitmap(bitmap) => bitmap.size(),
+            Self::Palette(data) => data.len(),
             Self::Pointer(pointer) => match pointer {
                 PointerUpdateData::SetHidden => 0,
                 PointerUpdateData::SetDefault => 0,
@@ -345,6 +359,7 @@ impl From<&FastPathUpdate<'_>> for UpdateCode {
         match update {
             FastPathUpdate::SurfaceCommands(_) => Self::SurfaceCommands,
             FastPathUpdate::Bitmap(_) => Self::Bitmap,
+            FastPathUpdate::Palette(_) => Self::Palette,
             FastPathUpdate::Pointer(action) => match action {
                 PointerUpdateData::SetHidden => Self::HiddenPointer,
                 PointerUpdateData::SetDefault => Self::DefaultPointer,
@@ -382,6 +397,8 @@ bitflags! {
     pub struct EncryptionFlags: u8 {
         const SECURE_CHECKSUM = 0x1;
         const ENCRYPTED = 0x2;
+
+        const _ = !0;
     }
 }
 
@@ -389,5 +406,7 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct Compression: u8 {
         const COMPRESSION_USED = 0x2;
+
+        const _ = !0;
     }
 }

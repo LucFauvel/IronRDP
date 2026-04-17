@@ -3,14 +3,15 @@ use ironrdp_connector::legacy::SendDataIndicationCtx;
 use ironrdp_core::WriteBuf;
 use ironrdp_dvc::{DrdynvcClient, DvcProcessor, DynamicVirtualChannel};
 use ironrdp_pdu::mcs::{DisconnectProviderUltimatum, DisconnectReason, McsMessage};
+use ironrdp_pdu::rdp::autodetect::{AutoDetectRequest, AutoDetectResponse};
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::multitransport::MultitransportRequestPdu;
 use ironrdp_pdu::rdp::server_error_info::{ErrorInfo, ProtocolIndependentCode, ServerSetErrorInfoPdu};
 use ironrdp_pdu::x224::X224;
-use ironrdp_svc::{client_encode_svc_messages, StaticChannelSet, SvcMessage, SvcProcessor, SvcProcessorMessages};
+use ironrdp_svc::{StaticChannelSet, SvcMessage, SvcProcessor, SvcProcessorMessages, client_encode_svc_messages};
 use tracing::debug;
 
-use crate::{reason_err, SessionError, SessionErrorExt as _, SessionResult};
+use crate::{SessionError, SessionErrorExt as _, SessionResult, reason_err};
 
 /// X224 Processor output
 #[derive(Debug, Clone)]
@@ -33,6 +34,19 @@ pub enum ProcessorOutput {
     /// [\[MS-RDPBCGR\] 2.2.15.1]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/de783158-8b01-4818-8fb0-62523a5b3490
     /// [`MultitransportResponsePdu`]: ironrdp_pdu::rdp::multitransport::MultitransportResponsePdu
     MultitransportRequest(MultitransportRequestPdu),
+    /// Auto-detect network characteristics from server ([\[MS-RDPBCGR\] 2.2.14]).
+    ///
+    /// Currently only surfaces [`AutoDetectRequest::NetworkCharacteristicsResult`].
+    /// RTT requests are handled internally with automatic responses.
+    ///
+    /// [\[MS-RDPBCGR\] 2.2.14]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dc672839-4f4e-40b1-a71c-cd6a959baa38
+    AutoDetect(AutoDetectRequest),
+    /// Slow-path graphics update ([MS-RDPBCGR] 2.2.9.1.1.3).
+    /// Raw update payload starting with `updateType(u16)`.
+    GraphicsUpdate(Vec<u8>),
+    /// Slow-path pointer update ([MS-RDPBCGR] 2.2.9.1.1.4).
+    /// Raw pointer payload starting with `messageType(u16) + pad(u16)`.
+    PointerUpdate(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +65,7 @@ pub struct Processor {
     static_channels: StaticChannelSet,
     user_channel_id: u16,
     io_channel_id: u16,
+    share_id: u32,
     connection_activation: ConnectionActivationSequence,
 }
 
@@ -59,14 +74,20 @@ impl Processor {
         static_channels: StaticChannelSet,
         user_channel_id: u16,
         io_channel_id: u16,
+        share_id: u32,
         connection_activation: ConnectionActivationSequence,
     ) -> Self {
         Self {
             static_channels,
             user_channel_id,
             io_channel_id,
+            share_id,
             connection_activation,
         }
+    }
+
+    pub fn set_share_id(&mut self, share_id: u32) {
+        self.share_id = share_id;
     }
 
     pub fn get_svc_processor<T: SvcProcessor + 'static>(&self) -> Option<&T> {
@@ -174,6 +195,40 @@ impl Processor {
                             )),
                         ])
                     }
+                    ShareDataPdu::AutoDetectReq(AutoDetectRequest::RttRequest { sequence_number, .. }) => {
+                        let response = AutoDetectResponse::RttResponse { sequence_number };
+                        let mut frame = WriteBuf::new();
+                        ironrdp_connector::legacy::encode_share_data(
+                            self.user_channel_id,
+                            self.io_channel_id,
+                            self.share_id,
+                            ShareDataPdu::AutoDetectRsp(response),
+                            &mut frame,
+                        )
+                        .map_err(crate::legacy::map_error)?;
+                        debug!(sequence_number, "Responded to auto-detect RTT request");
+                        Ok(vec![ProcessorOutput::ResponseFrame(frame.into_inner())])
+                    }
+                    ShareDataPdu::AutoDetectReq(req @ AutoDetectRequest::NetworkCharacteristicsResult { .. }) => {
+                        debug!(?req, "Received network characteristics from server");
+                        Ok(vec![ProcessorOutput::AutoDetect(req)])
+                    }
+                    ShareDataPdu::AutoDetectReq(_) => {
+                        debug!(pdu = %ctx.pdu.as_short_name(), "Auto-detect request not yet implemented");
+                        Ok(Vec::new())
+                    }
+                    // TODO: slow-path payloads may be bulk-compressed when
+                    // ClientInfoFlags::COMPRESSION is negotiated. Decompression
+                    // should happen here before passing data downstream. Currently
+                    // IronRDP does not wire bulk decompression into this path.
+                    ShareDataPdu::Update(data) => {
+                        debug!("Got slow-path graphics update ({} bytes)", data.len());
+                        Ok(vec![ProcessorOutput::GraphicsUpdate(data)])
+                    }
+                    ShareDataPdu::Pointer(data) => {
+                        debug!("Got slow-path pointer update ({} bytes)", data.len());
+                        Ok(vec![ProcessorOutput::PointerUpdate(data)])
+                    }
                     _ => Err(reason_err!(
                         "IO channel",
                         "unhandled PDU: {:?}",
@@ -196,9 +251,14 @@ impl Processor {
 
     /// Send a pdu on the static global channel. Typically used to send input events
     pub fn encode_static(&self, output: &mut WriteBuf, pdu: ShareDataPdu) -> SessionResult<usize> {
-        let written =
-            ironrdp_connector::legacy::encode_share_data(self.user_channel_id, self.io_channel_id, 0, pdu, output)
-                .map_err(crate::legacy::map_error)?;
+        let written = ironrdp_connector::legacy::encode_share_data(
+            self.user_channel_id,
+            self.io_channel_id,
+            self.share_id,
+            pdu,
+            output,
+        )
+        .map_err(crate::legacy::map_error)?;
         Ok(written)
     }
 }

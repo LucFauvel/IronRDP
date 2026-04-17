@@ -6,7 +6,7 @@ mod tests;
 use std::{io, str};
 
 use bitflags::bitflags;
-use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
+use ironrdp_core::{Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, ensure_fixed_part_size};
 use thiserror::Error;
 
 use crate::PduError;
@@ -53,7 +53,7 @@ impl<'de> Decode<'de> for ChannelPduHeader {
         ensure_fixed_part_size!(in: src);
 
         let total_length = src.read_u32();
-        let flags = ChannelControlFlags::from_bits_truncate(src.read_u32());
+        let flags = ChannelControlFlags::from_bits_retain(src.read_u32());
         Ok(Self {
             length: total_length,
             flags,
@@ -74,6 +74,8 @@ bitflags! {
         const PACKET_AT_FRONT = 0x0040_0000;
         const PACKET_FLUSHED = 0x0080_0000;
         const COMPRESSION_TYPE_MASK = 0x000F_0000;
+
+        const _ = !0;
     }
 }
 

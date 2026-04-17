@@ -8,12 +8,13 @@ use ironrdp::displaycontrol::client::DisplayControlClient;
 use ironrdp::displaycontrol::pdu::MonitorLayoutEntry;
 #[cfg(windows)]
 use ironrdp::dvc::DvcProcessor as _;
+use ironrdp::echo::client::EchoClient;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::graphics::pointer::DecodedPointer;
 use ironrdp::pdu::input::fast_path::FastPathInputEvent;
-use ironrdp::pdu::{pdu_other_err, PduResult};
+use ironrdp::pdu::{PduResult, pdu_other_err};
 use ironrdp::session::image::DecodedImage;
-use ironrdp::session::{fast_path, ActiveStage, ActiveStageOutput, GracefulDisconnectReason, SessionResult};
+use ironrdp::session::{ActiveStage, ActiveStageOutput, GracefulDisconnectReason, SessionResult, fast_path};
 use ironrdp::svc::SvcMessage;
 use ironrdp::webauthn::client::WebAuthnClient;
 use ironrdp::{cliprdr, connector, rdpdr, rdpsnd, session};
@@ -23,7 +24,7 @@ use ironrdp_dvc_com_plugin::load_dvc_plugin;
 use ironrdp_dvc_pipe_proxy::DvcNamedPipeProxy;
 use ironrdp_rdpsnd_native::cpal;
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
-use ironrdp_tokio::{single_sequence_step_read, split_tokio_framed, FramedWrite};
+use ironrdp_tokio::{FramedWrite, single_sequence_step_read, split_tokio_framed};
 use rdpdr::NoopRdpdrBackend;
 use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -188,7 +189,7 @@ async fn connect(
     cliprdr_factory: Option<&(dyn CliprdrBackendFactory + Send)>,
     dvc_pipe_proxy_factory: &DvcPipeProxyFactory,
 ) -> ConnectorResult<(ConnectionResult, UpgradedFramed)> {
-    let dest = format!("{}:{}", config.destination.name(), config.destination.port());
+    let dest = config.destination.to_string();
 
     let (client_addr, stream) = if let Some(ref gw_config) = config.gw {
         let (gw, client_addr) = ironrdp_mstsgu::GwClient::connect(gw_config, &config.connector.client_name)
@@ -207,7 +208,8 @@ async fn connect(
     let mut framed = ironrdp_tokio::TokioFramed::new(stream);
 
     let mut drdynvc = ironrdp::dvc::DrdynvcClient::new()
-        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())))
+        .with_dynamic_channel(EchoClient::new());
 
     // Instantiate all DVC proxies
     for proxy in config.dvc_pipe_proxies.iter() {
@@ -292,7 +294,7 @@ async fn connect(
         &mut ReqwestNetworkClient::new(),
         (&config.destination).into(),
         server_public_key.to_owned(),
-        None,
+        config.kerberos_config.clone(),
     )
     .await?;
 
@@ -335,7 +337,8 @@ async fn connect_ws(
     let mut framed = ironrdp_tokio::TokioFramed::new(ws);
 
     let mut drdynvc = ironrdp::dvc::DrdynvcClient::new()
-        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+        .with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())))
+        .with_dynamic_channel(EchoClient::new());
 
     // Instantiate all DVC proxies
     for proxy in config.dvc_pipe_proxies.iter() {
@@ -406,7 +409,7 @@ async fn connect_ws(
         connector.attach_static_channel(cliprdr);
     }
 
-    let destination = format!("{}:{}", config.destination.name(), config.destination.port());
+    let destination = config.destination.to_string();
 
     let (upgraded, server_public_key) = connect_rdcleanpath(
         &mut framed,
@@ -424,7 +427,7 @@ async fn connect_ws(
         &mut ReqwestNetworkClient::new(),
         (&config.destination).into(),
         server_public_key,
-        None,
+        config.kerberos_config.clone(),
     )
     .await?;
 
@@ -603,6 +606,9 @@ async fn active_session(
 
     let mut active_stage = ActiveStage::new(connection_result);
 
+    // Timer interval for driving clipboard lock timeouts (5 second interval)
+    let mut cleanup_interval = tokio::time::interval(core::time::Duration::from_secs(5));
+
     let disconnect_reason = 'outer: loop {
         let outputs = tokio::select! {
             frame = reader.read_pdu() => {
@@ -642,7 +648,7 @@ async fn active_session(
                         active_stage.graceful_shutdown()?
                     }
                     RdpInputEvent::Clipboard(event) => {
-                        if let Some(cliprdr) = active_stage.get_svc_processor::<cliprdr::CliprdrClient>() {
+                        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<cliprdr::CliprdrClient>() {
                             if let Some(svc_messages) = match event {
                                 ClipboardMessage::SendInitiateCopy(formats) => {
                                     Some(cliprdr.initiate_copy(&formats)
@@ -654,14 +660,6 @@ async fn active_session(
                                 }
                                 ClipboardMessage::SendInitiatePaste(format) => {
                                     Some(cliprdr.initiate_paste(format)
-                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
-                                }
-                                ClipboardMessage::SendLockClipboard { clip_data_id } => {
-                                    Some(cliprdr.lock_clipboard(clip_data_id)
-                                        .map_err(|e| session::custom_err!("CLIPRDR", e))?)
-                                }
-                                ClipboardMessage::SendUnlockClipboard { clip_data_id } => {
-                                    Some(cliprdr.unlock_clipboard(clip_data_id)
                                         .map_err(|e| session::custom_err!("CLIPRDR", e))?)
                                 }
                                 ClipboardMessage::SendFileContentsRequest(request) => {
@@ -695,6 +693,27 @@ async fn active_session(
                         let frame = active_stage.encode_dvc_messages(messages)?;
                         vec![ActiveStageOutput::ResponseFrame(frame)]
                     }
+                }
+            }
+            _ = cleanup_interval.tick() => {
+                // Drive clipboard lock timeout cleanup
+                if let Some(cliprdr) = active_stage.get_svc_processor_mut::<cliprdr::CliprdrClient>() {
+                    match cliprdr.drive_timeouts() {
+                        Ok(svc_messages) => {
+                            let frame = active_stage.process_svc_processor_messages(svc_messages)?;
+                            if !frame.is_empty() {
+                                vec![ActiveStageOutput::ResponseFrame(frame)]
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Clipboard timeout cleanup failed");
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    Vec::new()
                 }
             }
         };
@@ -767,6 +786,7 @@ async fn active_session(
                             io_channel_id,
                             user_channel_id,
                             desktop_size,
+                            share_id,
                             enable_server_pointer,
                             pointer_software_rendering,
                         } = connection_activation.connection_activation_state()
@@ -779,12 +799,14 @@ async fn active_session(
                                 fast_path::ProcessorBuilder {
                                     io_channel_id,
                                     user_channel_id,
+                                    share_id,
                                     enable_server_pointer,
                                     pointer_software_rendering,
                                     bulk_decompressor: None,
                                 }
                                 .build(),
                             );
+                            active_stage.set_share_id(share_id);
                             active_stage.set_enable_server_pointer(enable_server_pointer);
                             break 'activation_seq;
                         }
@@ -796,6 +818,9 @@ async fn active_session(
                         requested_protocol = ?pdu.requested_protocol,
                         "Multitransport request received (UDP transport not implemented)"
                     );
+                }
+                ActiveStageOutput::AutoDetect(request) => {
+                    debug!(?request, "Auto-detect");
                 }
                 ActiveStageOutput::Terminate(reason) => break 'outer reason,
             }

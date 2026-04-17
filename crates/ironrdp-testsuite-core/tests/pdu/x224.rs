@@ -6,7 +6,7 @@ use ironrdp_pdu::nego::{
 };
 use ironrdp_pdu::tpdu::{TpduCode, TpduHeader};
 use ironrdp_pdu::tpkt::TpktHeader;
-use ironrdp_pdu::x224::{user_data_size, X224};
+use ironrdp_pdu::x224::{X224, user_data_size};
 use ironrdp_testsuite_core::encode_decode_test;
 
 const SAMPLE_TPKT_HEADER_BINARY: [u8; 4] = [
@@ -170,7 +170,7 @@ encode_decode_test! {
 
     nego_confirm_response:
         X224(ConnectionConfirm::Response {
-            flags: ResponseFlags::from_bits_truncate(0x1F),
+            flags: ResponseFlags::from_bits_retain(0x1F),
             protocol: SecurityProtocol::HYBRID,
         }),
         [

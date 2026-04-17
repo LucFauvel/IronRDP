@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use ironrdp_core::assert_impl;
-use ironrdp_graphics::color_conversion::rdp_16bit_to_rgb;
+use ironrdp_graphics::color_conversion::{rdp_15bit_to_rgb, rdp_16bit_to_rgb};
 use ironrdp_graphics::image_processing::{ImageRegion, ImageRegionMut, PixelFormat};
 use ironrdp_graphics::pointer::DecodedPointer;
 use ironrdp_graphics::rectangle_processing::Region;
 use ironrdp_pdu::geometry::{InclusiveRectangle, Rectangle as _};
-use tracing::trace;
+use tracing::{debug, trace};
 
-use crate::{custom_err, SessionResult};
+use crate::{SessionResult, custom_err};
 
 const TILE_SIZE: u16 = 64;
 
@@ -198,6 +198,11 @@ impl DecodedImage {
 
     pub fn height(&self) -> u16 {
         self.height
+    }
+
+    /// Returns `true` if the rectangle fits entirely within the image bounds.
+    fn rect_fits(&self, rect: &InclusiveRectangle) -> bool {
+        rect.right < self.width && rect.bottom < self.height
     }
 
     fn apply_pointer_layer(&mut self, layer: PointerLayer) -> SessionResult<Option<InclusiveRectangle>> {
@@ -496,6 +501,14 @@ impl DecodedImage {
     ) -> SessionResult<InclusiveRectangle> {
         trace!("Tile: {:?}", update_rectangle);
 
+        if !self.rect_fits(&clipping_rectangles.extents) {
+            debug!(
+                "Skipping tile update {:?} outside image bounds {}x{}",
+                clipping_rectangles.extents, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
         let pointer_rendering_state = self.pointer_rendering_begin(&clipping_rectangles.extents)?;
 
         let update_region = clipping_rectangles.intersect_rectangle(update_rectangle);
@@ -535,12 +548,19 @@ impl DecodedImage {
         Ok(update_rectangle)
     }
 
-    // FIXME: this assumes PixelFormat::RgbA32
     pub(crate) fn apply_rgb16_bitmap(
         &mut self,
         rgb16: &[u8],
         update_rectangle: &InclusiveRectangle,
     ) -> SessionResult<InclusiveRectangle> {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping rgb16 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
         const SRC_COLOR_DEPTH: usize = 2;
         const DST_COLOR_DEPTH: usize = 4;
 
@@ -548,6 +568,7 @@ impl DecodedImage {
         let rectangle_width = usize::from(update_rectangle.width());
         let top = usize::from(update_rectangle.top);
         let left = usize::from(update_rectangle.left);
+        let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
 
         let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
 
@@ -567,10 +588,10 @@ impl DecodedImage {
                         let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
 
                         let [r, g, b] = rdp_16bit_to_rgb(rgb16_value);
-                        self.data[dst_idx] = r;
-                        self.data[dst_idx + 1] = g;
-                        self.data[dst_idx + 2] = b;
-                        self.data[dst_idx + 3] = 0xff;
+                        self.data[dst_idx + ri] = r;
+                        self.data[dst_idx + gi] = g;
+                        self.data[dst_idx + bi] = b;
+                        self.data[dst_idx + ai] = 0xff;
                     })
             });
 
@@ -579,7 +600,155 @@ impl DecodedImage {
         Ok(update_rectangle)
     }
 
-    // FIXME: this assumes PixelFormat::RgbA32
+    /// Apply a 15-bit (RGB555) bitmap. Bottom-up row order, 2 bytes per pixel.
+    pub(crate) fn apply_rgb15_bitmap(
+        &mut self,
+        rgb15: &[u8],
+        update_rectangle: &InclusiveRectangle,
+    ) -> SessionResult<InclusiveRectangle> {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping rgb15 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
+        const SRC_COLOR_DEPTH: usize = 2;
+        const DST_COLOR_DEPTH: usize = 4;
+
+        let image_width = usize::from(self.width);
+        let rectangle_width = usize::from(update_rectangle.width());
+        let top = usize::from(update_rectangle.top);
+        let left = usize::from(update_rectangle.left);
+        let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
+
+        let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
+
+        rgb15
+            .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
+            .rev()
+            .enumerate()
+            .for_each(|(row_idx, row)| {
+                row.chunks_exact(SRC_COLOR_DEPTH)
+                    .enumerate()
+                    .for_each(|(col_idx, src_pixel)| {
+                        let rgb15_value = u16::from_le_bytes(
+                            src_pixel
+                                .try_into()
+                                .expect("src_pixel contains exactly two u8 elements"),
+                        );
+                        let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
+
+                        let [r, g, b] = rdp_15bit_to_rgb(rgb15_value);
+                        self.data[dst_idx + ri] = r;
+                        self.data[dst_idx + gi] = g;
+                        self.data[dst_idx + bi] = b;
+                        self.data[dst_idx + ai] = 0xff;
+                    })
+            });
+
+        let update_rectangle = self.pointer_rendering_end(pointer_rendering_state)?;
+
+        Ok(update_rectangle)
+    }
+
+    /// Apply a 24-bit BGR bitmap. RLE 24bpp decompresses to BGR byte order,
+    /// and uncompressed 24bpp bitmaps are also BGR per MS-RDPBCGR.
+    /// Bottom-up row order, 3 bytes per pixel.
+    pub(crate) fn apply_bgr24_bitmap(
+        &mut self,
+        bgr24: &[u8],
+        update_rectangle: &InclusiveRectangle,
+    ) -> SessionResult<InclusiveRectangle> {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping bgr24 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
+        const SRC_COLOR_DEPTH: usize = 3;
+        const DST_COLOR_DEPTH: usize = 4;
+
+        let image_width = usize::from(self.width);
+        let rectangle_width = usize::from(update_rectangle.width());
+        let top = usize::from(update_rectangle.top);
+        let left = usize::from(update_rectangle.left);
+        let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
+
+        let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
+
+        bgr24
+            .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
+            .rev()
+            .enumerate()
+            .for_each(|(row_idx, row)| {
+                row.chunks_exact(SRC_COLOR_DEPTH)
+                    .enumerate()
+                    .for_each(|(col_idx, src_pixel)| {
+                        let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
+
+                        // BGR -> RGB channel swap
+                        self.data[dst_idx + ri] = src_pixel[2];
+                        self.data[dst_idx + gi] = src_pixel[1];
+                        self.data[dst_idx + bi] = src_pixel[0];
+                        self.data[dst_idx + ai] = 0xff;
+                    })
+            });
+
+        let update_rectangle = self.pointer_rendering_end(pointer_rendering_state)?;
+
+        Ok(update_rectangle)
+    }
+
+    /// Apply an 8-bit palette-indexed bitmap. Each source byte is a palette index.
+    /// Bottom-up row order.
+    pub(crate) fn apply_rgb8_with_palette(
+        &mut self,
+        indexed: &[u8],
+        update_rectangle: &InclusiveRectangle,
+        palette: &[[u8; 3]; 256],
+    ) -> SessionResult<InclusiveRectangle> {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping rgb8 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
+        const DST_COLOR_DEPTH: usize = 4;
+
+        let image_width = usize::from(self.width);
+        let rectangle_width = usize::from(update_rectangle.width());
+        let top = usize::from(update_rectangle.top);
+        let left = usize::from(update_rectangle.left);
+        let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
+
+        let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
+
+        indexed
+            .chunks_exact(rectangle_width)
+            .rev()
+            .enumerate()
+            .for_each(|(row_idx, row)| {
+                row.iter().enumerate().for_each(|(col_idx, &index)| {
+                    let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
+                    let [r, g, b] = palette[usize::from(index)];
+                    self.data[dst_idx + ri] = r;
+                    self.data[dst_idx + gi] = g;
+                    self.data[dst_idx + bi] = b;
+                    self.data[dst_idx + ai] = 0xff;
+                })
+            });
+
+        let update_rectangle = self.pointer_rendering_end(pointer_rendering_state)?;
+
+        Ok(update_rectangle)
+    }
+
     fn apply_rgb24_iter<'a, I>(
         &mut self,
         rgb24: I,
@@ -588,12 +757,21 @@ impl DecodedImage {
     where
         I: Iterator<Item = &'a [u8]>,
     {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping rgb24 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
         const SRC_COLOR_DEPTH: usize = 3;
         const DST_COLOR_DEPTH: usize = 4;
 
         let image_width = usize::from(self.width);
         let top = usize::from(update_rectangle.top);
         let left = usize::from(update_rectangle.left);
+        let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
 
         let pointer_rendering_state = self.pointer_rendering_begin(update_rectangle)?;
 
@@ -603,10 +781,10 @@ impl DecodedImage {
                 .for_each(|(col_idx, src_pixel)| {
                     let dst_idx = ((top + row_idx) * image_width + left + col_idx) * DST_COLOR_DEPTH;
 
-                    // Copy RGB channels as is
-                    self.data[dst_idx..dst_idx + SRC_COLOR_DEPTH].copy_from_slice(src_pixel);
-                    // Set alpha channel to opaque(0xFF)
-                    self.data[dst_idx + 3] = 0xFF;
+                    self.data[dst_idx + ri] = src_pixel[0];
+                    self.data[dst_idx + gi] = src_pixel[1];
+                    self.data[dst_idx + bi] = src_pixel[2];
+                    self.data[dst_idx + ai] = 0xFF;
                 })
         });
 
@@ -631,13 +809,20 @@ impl DecodedImage {
         }
     }
 
-    // FIXME: this assumes PixelFormat::RgbA32
     pub(crate) fn apply_rgb32_bitmap(
         &mut self,
         rgb32: &[u8],
         format: PixelFormat,
         update_rectangle: &InclusiveRectangle,
     ) -> SessionResult<InclusiveRectangle> {
+        if !self.rect_fits(update_rectangle) {
+            debug!(
+                "Skipping rgb32 update {:?} outside image bounds {}x{}",
+                update_rectangle, self.width, self.height,
+            );
+            return Ok(InclusiveRectangle::empty());
+        }
+
         const SRC_COLOR_DEPTH: usize = 4;
         const DST_COLOR_DEPTH: usize = 4;
 
@@ -663,6 +848,7 @@ impl DecodedImage {
                         })
                 });
         } else {
+            let [ri, gi, bi, ai] = self.pixel_format.channel_offsets();
             rgb32
                 .chunks_exact(rectangle_width * SRC_COLOR_DEPTH)
                 .rev()
@@ -676,7 +862,11 @@ impl DecodedImage {
                             let c = format
                                 .read_color(src_pixel)
                                 .map_err(|err| custom_err!("read color", err))?;
-                            self.data[dst_idx..dst_idx + SRC_COLOR_DEPTH].copy_from_slice(&[c.r, c.g, c.b, c.a]);
+
+                            self.data[dst_idx + ri] = c.r;
+                            self.data[dst_idx + gi] = c.g;
+                            self.data[dst_idx + bi] = c.b;
+                            self.data[dst_idx + ai] = c.a;
 
                             Ok(())
                         })?;

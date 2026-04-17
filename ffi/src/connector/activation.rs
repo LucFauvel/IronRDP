@@ -5,8 +5,8 @@ pub mod ffi {
     use crate::connector::config::ffi::DesktopSize;
     use crate::connector::ffi::PduHint;
     use crate::connector::result::ffi::Written;
-    use crate::error::ffi::IronRdpError;
     use crate::error::IncorrectEnumTypeError;
+    use crate::error::ffi::IronRdpError;
     use crate::pdu::ffi::WriteBuf;
 
     #[diplomat::opaque]
@@ -88,6 +88,7 @@ pub mod ffi {
                     io_channel_id,
                     user_channel_id,
                     desktop_size,
+                    share_id: _,
                     connection_finalization,
                 } => Ok(Box::new(ConnectionActivationStateConnectionFinalization {
                     io_channel_id,
@@ -107,11 +108,13 @@ pub mod ffi {
                     io_channel_id,
                     user_channel_id,
                     desktop_size,
+                    share_id,
                     enable_server_pointer,
                     pointer_software_rendering,
                 } => Ok(Box::new(ConnectionActivationStateFinalized {
                     io_channel_id: *io_channel_id,
                     user_channel_id: *user_channel_id,
+                    share_id: *share_id,
                     desktop_size: *desktop_size,
                     enable_server_pointer: *enable_server_pointer,
                     pointer_software_rendering: *pointer_software_rendering,
@@ -165,6 +168,7 @@ pub mod ffi {
     pub struct ConnectionActivationStateFinalized {
         pub io_channel_id: u16,
         pub user_channel_id: u16,
+        pub share_id: u32,
         pub desktop_size: ironrdp::connector::DesktopSize,
         pub enable_server_pointer: bool,
         pub pointer_software_rendering: bool,
@@ -177,6 +181,10 @@ pub mod ffi {
 
         pub fn get_user_channel_id(&self) -> u16 {
             self.user_channel_id
+        }
+
+        pub fn get_share_id(&self) -> u32 {
+            self.share_id
         }
 
         pub fn get_desktop_size(&self) -> Box<DesktopSize> {

@@ -1,10 +1,10 @@
 use core::mem;
 
 use ironrdp_connector::{
-    encode_x224_packet, general_err, reason_err, ConnectorError, ConnectorErrorExt as _, ConnectorResult, DesktopSize,
-    Sequence, State, Written,
+    ConnectorError, ConnectorErrorExt as _, ConnectorResult, DesktopSize, Sequence, State, Written, encode_x224_packet,
+    general_err, reason_err,
 };
-use ironrdp_core::{decode, WriteBuf};
+use ironrdp_core::{WriteBuf, decode};
 use ironrdp_pdu as pdu;
 use ironrdp_pdu::nego::SecurityProtocol;
 use ironrdp_pdu::x224::X224;
@@ -34,6 +34,7 @@ pub struct Acceptor {
     static_channels: StaticChannelSet,
     saved_for_reactivation: AcceptorState,
     pub(crate) creds: Option<Credentials>,
+    received_credentials: Option<Credentials>,
     reactivation: bool,
 }
 
@@ -45,6 +46,15 @@ pub struct AcceptorResult {
     pub user_channel_id: u16,
     pub io_channel_id: u16,
     pub reactivation: bool,
+    /// Credentials received from the client during SecureSettingsExchange.
+    ///
+    /// Present for TLS-mode connections where the client sends credentials
+    /// in the ClientInfoPdu. `None` for CredSSP/Hybrid connections (where
+    /// authentication happens during the CredSSP exchange instead).
+    ///
+    /// Servers that need to validate credentials (e.g., via PAM or LDAP)
+    /// can use this field for post-handshake validation.
+    pub credentials: Option<Credentials>,
 }
 
 impl Acceptor {
@@ -64,6 +74,7 @@ impl Acceptor {
             static_channels: StaticChannelSet::new(),
             saved_for_reactivation: Default::default(),
             creds,
+            received_credentials: None,
             reactivation: false,
         }
     }
@@ -105,6 +116,7 @@ impl Acceptor {
             static_channels,
             saved_for_reactivation,
             creds: consumed.creds,
+            received_credentials: consumed.received_credentials,
             reactivation: true,
         })
     }
@@ -159,6 +171,7 @@ impl Acceptor {
                 user_channel_id: self.user_channel_id,
                 io_channel_id: self.io_channel_id,
                 reactivation: self.reactivation,
+                credentials: self.received_credentials.take(),
             }),
             previous_state => {
                 self.state = previous_state;
@@ -324,7 +337,31 @@ impl Sequence for Acceptor {
                 } else if self.security.is_empty() {
                     SecurityProtocol::empty()
                 } else {
-                    return Err(ConnectorError::general("failed to negotiate security protocol"));
+                    // No common security protocol. Send RDP_NEG_FAILURE so the client
+                    // gets a well-formed response instead of a TCP reset (MS-RDPBCGR 2.2.1.2.2).
+                    let failure_code = if self.security.intersects(SecurityProtocol::SSL) {
+                        nego::FailureCode::SSL_REQUIRED_BY_SERVER
+                    } else if self
+                        .security
+                        .intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX)
+                    {
+                        nego::FailureCode::HYBRID_REQUIRED_BY_SERVER
+                    } else {
+                        nego::FailureCode::SSL_REQUIRED_BY_SERVER
+                    };
+
+                    let failure = nego::ConnectionConfirm::Failure { code: failure_code };
+
+                    debug!(message = ?failure, "Send");
+
+                    ironrdp_core::encode_buf(&X224(failure), output).map_err(ConnectorError::encode)?;
+
+                    return Err(reason_err!(
+                        "security protocol mismatch",
+                        "server requires {:?} but client only offered {:?}",
+                        self.security,
+                        requested_protocol,
+                    ));
                 };
                 let connection_confirm = nego::ConnectionConfirm::Response {
                     flags: nego::ResponseFlags::empty(),
@@ -530,19 +567,24 @@ impl Sequence for Acceptor {
                 if !protocol.intersects(SecurityProtocol::HYBRID | SecurityProtocol::HYBRID_EX) {
                     let creds = client_info.client_info.credentials;
 
-                    if self.creds.as_ref() != Some(&creds) {
-                        // FIXME: How authorization should be denied with standard RDP security?
-                        // Since standard RDP security is not a priority, we just send a ServerDeniedConnection ServerSetErrorInfo PDU.
-                        let info = ServerSetErrorInfoPdu(ErrorInfo::ProtocolIndependentCode(
-                            ProtocolIndependentCode::ServerDeniedConnection,
-                        ));
+                    if let Some(expected) = &self.creds {
+                        if expected != &creds {
+                            // FIXME: How authorization should be denied with standard RDP security?
+                            // Since standard RDP security is not a priority, we just send a ServerDeniedConnection ServerSetErrorInfo PDU.
+                            let info = ServerSetErrorInfoPdu(ErrorInfo::ProtocolIndependentCode(
+                                ProtocolIndependentCode::ServerDeniedConnection,
+                            ));
 
-                        debug!(message = ?info, "Send");
+                            debug!(message = ?info, "Send");
 
-                        util::encode_send_data_indication(self.user_channel_id, self.io_channel_id, &info, output)?;
+                            util::encode_send_data_indication(self.user_channel_id, self.io_channel_id, &info, output)?;
 
-                        return Err(ConnectorError::general("invalid credentials"));
+                            return Err(ConnectorError::general("invalid credentials"));
+                        }
                     }
+
+                    // Store credentials for later retrieval via AcceptorResult.
+                    self.received_credentials = Some(creds);
                 }
 
                 (
@@ -691,7 +733,7 @@ impl Sequence for Acceptor {
                     }
 
                     mcs::McsMessage::DisconnectProviderUltimatum(ultimatum) => {
-                        return Err(reason_err!("received disconnect ultimatum", "{:?}", ultimatum.reason))
+                        return Err(reason_err!("received disconnect ultimatum", "{:?}", ultimatum.reason));
                     }
 
                     _ => {

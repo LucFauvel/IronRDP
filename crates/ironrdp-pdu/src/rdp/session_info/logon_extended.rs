@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, read_padding, Decode, DecodeResult, Encode,
-    EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+    ensure_size, invalid_field_err, read_padding,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
@@ -71,7 +71,7 @@ impl<'de> Decode<'de> for LogonInfoExtended {
         ensure_fixed_part_size!(in: src);
 
         let _self_length = src.read_u16();
-        let present_fields_flags = LogonExFlags::from_bits_truncate(src.read_u32());
+        let present_fields_flags = LogonExFlags::from_bits_retain(src.read_u32());
 
         let auto_reconnect = if present_fields_flags.contains(LogonExFlags::AUTO_RECONNECT_COOKIE) {
             Some(ServerAutoReconnect::decode(src)?)
@@ -210,6 +210,8 @@ bitflags! {
     pub struct LogonExFlags: u32 {
         const AUTO_RECONNECT_COOKIE = 0x0000_0001;
         const LOGON_ERRORS = 0x0000_0002;
+
+        const _ = !0;
     }
 }
 

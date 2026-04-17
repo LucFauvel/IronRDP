@@ -18,7 +18,7 @@ pub use self::lock::*;
 #[rustfmt::skip]
 use bitflags::bitflags;
 use ironrdp_core::{
-    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, ensure_fixed_part_size, invalid_field_err,
 };
 use ironrdp_svc::SvcEncode;
 
@@ -69,7 +69,7 @@ impl<'de> Decode<'de> for PartialHeader {
     fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let message_flags = ClipboardPduFlags::from_bits_truncate(src.read_u16());
+        let message_flags = ClipboardPduFlags::from_bits_retain(src.read_u16());
         let data_length = src.read_u32();
 
         Ok(Self {
@@ -243,7 +243,7 @@ impl<'de> Decode<'de> for ClipboardPdu<'de> {
             MSG_TYPE_FILE_CONTENTS_RESPONSE => ClipboardPdu::FileContentsResponse(FileContentsResponse::decode(src)?),
             MSG_TYPE_LOCK_CLIPDATA => ClipboardPdu::LockData(LockDataId::decode(src)?),
             MSG_TYPE_UNLOCK_CLIPDATA => ClipboardPdu::UnlockData(LockDataId::decode(src)?),
-            _ => return Err(invalid_field_err!("msgType", "Unknown clipboard PDU type")),
+            _ => return Err(invalid_field_err!("msgType", "unknown clipboard PDU type")),
         };
 
         Ok(pdu)
@@ -266,5 +266,7 @@ bitflags! {
         /// Used by the Short Format Name variant of the Format List Response PDU to indicate
         /// that the format names are in ASCII 8
         const ASCII_NAMES = 0x0004;
+
+        const _ = !0;
     }
 }

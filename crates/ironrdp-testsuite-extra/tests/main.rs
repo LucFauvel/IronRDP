@@ -1,12 +1,17 @@
 #![allow(unused_crate_dependencies)] // false positives because there is both a library and a binary
 #![allow(clippy::unwrap_used, reason = "unwrap is fine in tests")]
 
-use core::future::Future;
+mod config_rdp;
+
+use core::time::Duration;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use ironrdp::connector;
+use ironrdp::dvc::DrdynvcClient;
+use ironrdp::echo::client::EchoClient;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::{self, gcc};
 use ironrdp::server::{
@@ -21,7 +26,7 @@ use ironrdp_tls::TlsStream;
 use ironrdp_tokio::TokioStream;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tracing::debug;
 
 const DESKTOP_WIDTH: u16 = 1024;
@@ -85,6 +90,7 @@ async fn test_deactivation_reactivation() {
                             io_channel_id,
                             user_channel_id,
                             desktop_size,
+                            share_id,
                             enable_server_pointer,
                             pointer_software_rendering,
                         } = connection_activation.connection_activation_state()
@@ -97,12 +103,14 @@ async fn test_deactivation_reactivation() {
                                 session::fast_path::ProcessorBuilder {
                                     io_channel_id,
                                     user_channel_id,
+                                    share_id,
                                     enable_server_pointer,
                                     pointer_software_rendering,
                                     bulk_decompressor: None,
                                 }
                                 .build(),
                             );
+                            stage.set_share_id(share_id);
                             stage.set_enable_server_pointer(enable_server_pointer);
                             break 'activation_seq;
                         }
@@ -113,6 +121,60 @@ async fn test_deactivation_reactivation() {
         }
         (stage, framed)
     })
+    .await
+}
+
+#[tokio::test]
+async fn test_echo_virtual_channel_end_to_end() {
+    let payload = b"ironrdp echo e2e".to_vec();
+    let echo_payload = payload.clone();
+
+    client_server_with_connector(
+        default_client_config(),
+        |connector| connector.with_static_channel(DrdynvcClient::new().with_dynamic_channel(EchoClient::new())),
+        move |mut stage, mut framed, display_tx, echo_handle| async move {
+            let _display_tx = display_tx;
+            let mut image = DecodedImage::new(PixelFormat::RgbA32, DESKTOP_WIDTH, DESKTOP_HEIGHT);
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut matched_measurement = None;
+
+            while Instant::now() < deadline {
+                echo_handle
+                    .send_request(echo_payload.clone())
+                    .expect("send echo request");
+
+                for _ in 0..20 {
+                    let measurements = echo_handle.take_measurements();
+                    if let Some(measurement) = measurements.into_iter().find(|m| m.payload == echo_payload) {
+                        matched_measurement = Some(measurement);
+                        break;
+                    }
+
+                    let read_result = tokio::time::timeout(Duration::from_millis(150), framed.read_pdu()).await;
+                    let Ok(Ok((action, frame))) = read_result else {
+                        continue;
+                    };
+
+                    let outputs = stage.process(&mut image, action, &frame).expect("stage process");
+                    for output in outputs {
+                        if let ActiveStageOutput::ResponseFrame(frame) = output {
+                            framed.write_all(&frame).await.expect("write response frame");
+                        }
+                    }
+                }
+
+                if matched_measurement.is_some() {
+                    break;
+                }
+            }
+
+            let measurement = matched_measurement.expect("echo RTT measurement was not produced");
+            assert_eq!(measurement.payload, echo_payload);
+
+            (stage, framed)
+        },
+    )
     .await
 }
 
@@ -162,6 +224,26 @@ where
     F: FnOnce(ActiveStage, Framed<TokioStream<TlsStream<TcpStream>>>, UnboundedSender<DisplayUpdate>) -> Fut + 'static,
     Fut: Future<Output = (ActiveStage, Framed<TokioStream<TlsStream<TcpStream>>>)>,
 {
+    client_server_with_connector(
+        client_config,
+        |connector| connector,
+        move |stage, framed, display_tx, _echo_handle| clientfn(stage, framed, display_tx),
+    )
+    .await;
+}
+
+async fn client_server_with_connector<F, Fut, C>(client_config: connector::Config, connector_factory: C, clientfn: F)
+where
+    F: FnOnce(
+            ActiveStage,
+            Framed<TokioStream<TlsStream<TcpStream>>>,
+            UnboundedSender<DisplayUpdate>,
+            server::EchoServerHandle,
+        ) -> Fut
+        + 'static,
+    Fut: Future<Output = (ActiveStage, Framed<TokioStream<TlsStream<TcpStream>>>)>,
+    C: FnOnce(connector::ClientConnector) -> connector::ClientConnector + 'static,
+{
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
@@ -186,6 +268,7 @@ where
         domain: None,
     }));
     let ev = server.event_sender().clone();
+    let echo_handle = server.echo_handle().clone();
 
     let local = tokio::task::LocalSet::new();
     local
@@ -201,7 +284,8 @@ where
                 let tcp_stream = TcpStream::connect(server_addr).await.expect("TCP connect");
                 let client_addr = tcp_stream.local_addr().expect("local_addr");
                 let mut framed = ironrdp_tokio::TokioFramed::new(tcp_stream);
-                let mut connector = connector::ClientConnector::new(client_config, client_addr);
+                let connector = connector::ClientConnector::new(client_config, client_addr);
+                let mut connector = connector_factory(connector);
                 let should_upgrade = ironrdp_async::connect_begin(&mut framed, &mut connector)
                     .await
                     .expect("begin connection");
@@ -226,7 +310,8 @@ where
                 .expect("finalize connection");
 
                 let active_stage = ActiveStage::new(connection_result);
-                let (active_stage, mut upgraded_framed) = clientfn(active_stage, upgraded_framed, display_tx).await;
+                let (active_stage, mut upgraded_framed) =
+                    clientfn(active_stage, upgraded_framed, display_tx, echo_handle).await;
                 let outputs = active_stage.graceful_shutdown().expect("shutdown");
                 for out in outputs {
                     match out {

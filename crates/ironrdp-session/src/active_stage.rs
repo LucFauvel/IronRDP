@@ -1,24 +1,26 @@
 use std::sync::Arc;
 
 use ironrdp_bulk::BulkCompressor;
-use ironrdp_connector::connection_activation::ConnectionActivationSequence;
 use ironrdp_connector::ConnectionResult;
-use ironrdp_core::WriteBuf;
+use ironrdp_connector::connection_activation::ConnectionActivationSequence;
+use ironrdp_core::{ReadCursor, WriteBuf};
 use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_dvc::{DrdynvcClient, DvcProcessor, DynamicVirtualChannel};
 use ironrdp_graphics::pointer::DecodedPointer;
 use ironrdp_pdu::geometry::InclusiveRectangle;
 use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
+use ironrdp_pdu::rdp::autodetect::AutoDetectRequest;
 use ironrdp_pdu::rdp::client_info::CompressionType as PduCompressionType;
 use ironrdp_pdu::rdp::headers::ShareDataPdu;
 use ironrdp_pdu::rdp::multitransport::MultitransportRequestPdu;
-use ironrdp_pdu::{mcs, Action};
+use ironrdp_pdu::slow_path::{self, GraphicsUpdateType};
+use ironrdp_pdu::{Action, mcs};
 use ironrdp_svc::{SvcMessage, SvcProcessor, SvcProcessorMessages};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::fast_path::UpdateKind;
 use crate::image::DecodedImage;
-use crate::{fast_path, x224, SessionError, SessionErrorExt as _, SessionResult};
+use crate::{SessionError, SessionErrorExt as _, SessionResult, fast_path, x224};
 
 /// Converts the PDU-layer compression type to the bulk crate's compression type.
 fn to_bulk_compression_type(ct: PduCompressionType) -> ironrdp_bulk::CompressionType {
@@ -42,6 +44,7 @@ impl ActiveStage {
             connection_result.static_channels,
             connection_result.user_channel_id,
             connection_result.io_channel_id,
+            connection_result.share_id,
             connection_result.connection_activation,
         );
 
@@ -63,6 +66,7 @@ impl ActiveStage {
         let fast_path_processor = fast_path::ProcessorBuilder {
             io_channel_id: connection_result.io_channel_id,
             user_channel_id: connection_result.user_channel_id,
+            share_id: connection_result.share_id,
             enable_server_pointer: connection_result.enable_server_pointer,
             pointer_software_rendering: connection_result.pointer_software_rendering,
             bulk_decompressor,
@@ -144,13 +148,27 @@ impl ActiveStage {
                 )
             }
             Action::X224 => {
-                let outputs = self
-                    .x224_processor
-                    .process(frame)?
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<Vec<_>, _>>()?;
-                (outputs, Vec::new())
+                let x224_outputs = self.x224_processor.process(frame)?;
+                let mut stage_outputs = Vec::new();
+                let mut processor_updates = Vec::new();
+
+                for output in x224_outputs {
+                    match output {
+                        x224::ProcessorOutput::GraphicsUpdate(data) => {
+                            let updates = process_slow_path_graphics(&mut self.fast_path_processor, image, &data)?;
+                            processor_updates.extend(updates);
+                        }
+                        x224::ProcessorOutput::PointerUpdate(data) => {
+                            let updates = process_slow_path_pointer(&mut self.fast_path_processor, image, &data)?;
+                            processor_updates.extend(updates);
+                        }
+                        other => {
+                            stage_outputs.push(ActiveStageOutput::try_from(other)?);
+                        }
+                    }
+                }
+
+                (stage_outputs, processor_updates)
             }
         };
 
@@ -180,6 +198,12 @@ impl ActiveStage {
 
     pub fn set_fastpath_processor(&mut self, processor: fast_path::Processor) {
         self.fast_path_processor = processor;
+    }
+
+    /// Updates the share_id used by the x224 processor for encoding ShareDataPdu.
+    /// Must be called during Deactivation-Reactivation if the server assigns a new share_id.
+    pub fn set_share_id(&mut self, share_id: u32) {
+        self.x224_processor.set_share_id(share_id);
     }
 
     pub fn set_enable_server_pointer(&mut self, enable_server_pointer: bool) {
@@ -304,6 +328,15 @@ pub enum ActiveStageOutput {
     ///
     /// [\[MS-RDPBCGR\] 2.2.15.1]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/de783158-8b01-4818-8fb0-62523a5b3490
     MultitransportRequest(MultitransportRequestPdu),
+    /// Server-reported network characteristics ([\[MS-RDPBCGR\] 2.2.14.1.5]).
+    ///
+    /// Contains an [`AutoDetectRequest::NetworkCharacteristicsResult`] with
+    /// RTT and/or bandwidth measurements computed by the server.
+    ///
+    /// See [\[MS-RDPBCGR\] 2.2.14.1.5].
+    ///
+    /// [\[MS-RDPBCGR\] 2.2.14.1.5]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/228ffc5c-b60c-4d3e-9781-ac613f822fdf
+    AutoDetect(AutoDetectRequest),
 }
 
 impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
@@ -326,6 +359,12 @@ impl TryFrom<x224::ProcessorOutput> for ActiveStageOutput {
             }
             x224::ProcessorOutput::DeactivateAll(cas) => Ok(Self::DeactivateAll(cas)),
             x224::ProcessorOutput::MultitransportRequest(pdu) => Ok(Self::MultitransportRequest(pdu)),
+            x224::ProcessorOutput::AutoDetect(request) => Ok(Self::AutoDetect(request)),
+            // GraphicsUpdate and PointerUpdate are consumed in ActiveStage::process()
+            // before reaching this conversion.
+            x224::ProcessorOutput::GraphicsUpdate(_) | x224::ProcessorOutput::PointerUpdate(_) => Err(
+                SessionError::general("slow-path graphics/pointer updates should be handled before this conversion"),
+            ),
         }
     }
 }
@@ -353,4 +392,46 @@ impl core::fmt::Display for GracefulDisconnectReason {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(&self.description())
     }
+}
+
+/// Parse and process a slow-path graphics update through the shared bitmap pipeline.
+fn process_slow_path_graphics(
+    fast_path_processor: &mut fast_path::Processor,
+    image: &mut DecodedImage,
+    data: &[u8],
+) -> SessionResult<Vec<UpdateKind>> {
+    let mut src = ReadCursor::new(data);
+    let update_type = slow_path::read_graphics_update_type(&mut src).map_err(SessionError::decode)?;
+
+    match update_type {
+        GraphicsUpdateType::Bitmap => {
+            let bitmap = slow_path::decode_slow_path_bitmap(&mut src).map_err(SessionError::decode)?;
+            fast_path_processor.process_bitmap_update(image, bitmap)
+        }
+        GraphicsUpdateType::Orders => {
+            warn!("Slow-path drawing orders not supported (MS-RDPEGDI)");
+            Ok(Vec::new())
+        }
+        GraphicsUpdateType::Palette => {
+            warn!("Slow-path palette update not supported (8bpp)");
+            Ok(Vec::new())
+        }
+        // Synchronize is an artifact from the T.128 multipoint protocol
+        // and carries no data. Safe to ignore.
+        GraphicsUpdateType::Synchronize => {
+            debug!("Ignoring slow-path synchronize update");
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Parse and process a slow-path pointer update through the shared pointer pipeline.
+fn process_slow_path_pointer(
+    fast_path_processor: &mut fast_path::Processor,
+    image: &mut DecodedImage,
+    data: &[u8],
+) -> SessionResult<Vec<UpdateKind>> {
+    let mut src = ReadCursor::new(data);
+    let pointer = slow_path::decode_slow_path_pointer(&mut src).map_err(SessionError::decode)?;
+    fast_path_processor.process_pointer_update(image, pointer)
 }

@@ -7,11 +7,11 @@ pub mod rpce;
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_size, invalid_field_err, other_err, DecodeError, DecodeResult, EncodeResult, ReadCursor,
-    WriteCursor,
+    DecodeError, DecodeResult, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_size, invalid_field_err,
+    other_err,
 };
 use ironrdp_pdu::utils::{
-    encoded_multistring_len, read_multistring_from_cursor, write_multistring_to_cursor, CharacterSet,
+    CharacterSet, encoded_multistring_len, read_multistring_from_cursor, write_multistring_to_cursor,
 };
 use tracing::{error, warn};
 
@@ -905,6 +905,8 @@ bitflags! {
         const SCARD_STATE_INUSE = 0x0000_0100;
         const SCARD_STATE_MUTE = 0x0000_0200;
         const SCARD_STATE_UNPOWERED = 0x0000_0400;
+
+        const _ = !0;
     }
 }
 
@@ -1026,6 +1028,8 @@ bitflags! {
         const SCARD_PROTOCOL_RAW = 0x0001_0000;
         const SCARD_PROTOCOL_DEFAULT = 0x8000_0000;
         const SCARD_PROTOCOL_OPTIMAL = 0x0000_0000;
+
+        const _ = !0;
     }
 }
 

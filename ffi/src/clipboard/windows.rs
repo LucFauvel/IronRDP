@@ -4,9 +4,9 @@
 use ironrdp_cliprdr_native as _;
 
 use super::ffi::CliprdrBackendFactory;
-use crate::error::ffi::IronRdpError;
 #[cfg(not(windows))]
-use crate::error::WrongOSError; // avoid linter error, stub clipboard will be used in later commit
+use crate::error::WrongOSError;
+use crate::error::ffi::IronRdpError; // avoid linter error, stub clipboard will be used in later commit
 
 /*
     Why are we creating a WinCliprdrInner struct and implement differently?
@@ -94,7 +94,7 @@ impl WinCliprdrInner {
     fn new() -> Result<WinCliprdrInner, Box<IronRdpError>> {
         let (sender, receiver) = std::sync::mpsc::channel();
 
-        let proxy = crate::clipboard::FfiClipbarodMessageProxy { sender };
+        let proxy = crate::clipboard::FfiClipboardMessageProxy { sender };
 
         let clipboard = ironrdp_cliprdr_native::WinClipboard::new(proxy)?;
 
@@ -102,7 +102,11 @@ impl WinCliprdrInner {
     }
 
     fn next_clipboard_message(&self) -> Result<Option<ironrdp::cliprdr::backend::ClipboardMessage>, Box<IronRdpError>> {
-        Ok(self.receiver.try_recv().ok())
+        match self.receiver.try_recv() {
+            Ok(msg) => Ok(Some(msg)),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("clipboard message channel disconnected".into()),
+        }
     }
 
     fn backend_factory(&self) -> Result<CliprdrBackendFactory, Box<IronRdpError>> {

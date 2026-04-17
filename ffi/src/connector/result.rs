@@ -1,8 +1,8 @@
 #[diplomat::bridge]
 pub mod ffi {
     use crate::connector::config::ffi::DesktopSize;
-    use crate::error::ffi::IronRdpError;
     use crate::error::ValueConsumedError;
+    use crate::error::ffi::IronRdpError;
     use crate::utils::ffi::OptionalUsize;
 
     #[diplomat::opaque]
@@ -47,6 +47,14 @@ pub mod ffi {
                 .as_ref()
                 .ok_or_else(|| ValueConsumedError::for_item("ConnectionResult"))?
                 .user_channel_id)
+        }
+
+        pub fn get_share_id(&self) -> Result<u32, Box<IronRdpError>> {
+            Ok(self
+                .0
+                .as_ref()
+                .ok_or_else(|| ValueConsumedError::for_item("ConnectionResult"))?
+                .share_id)
         }
 
         pub fn get_desktop_size(&self) -> Result<Box<DesktopSize>, Box<IronRdpError>> {

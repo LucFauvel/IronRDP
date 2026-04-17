@@ -48,10 +48,10 @@ iron-remote-desktop.path = "../iron-remote-desktop"
 # WASM
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Performance", "Window"] }
 js-sys = "0.3"
-gloo-net = { version = "0.6", default-features = false, features = ["websocket", "http", "io-util"] }
-gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+gloo-net = { version = "0.7", default-features = false, features = ["websocket", "http", "io-util"] }
+gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
 
 # Rendering
 softbuffer = { version = "0.4", default-features = false }
@@ -62,6 +62,7 @@ rgb = "0.8"
 # Enable WebAssembly support for a few crates
 getrandom2 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom4 = { package = "getrandom", version = "0.4.0-rc.0", features = ["wasm_js"] } # picky rc.22 transitive dep
 chrono = { version = "0.4", features = ["wasmbind"] }
 time = { version = "0.3", features = ["wasm-bindgen"] }
 

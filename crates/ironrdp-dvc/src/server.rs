@@ -1,19 +1,21 @@
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::any::TypeId;
 use core::fmt;
 
-use ironrdp_core::{cast_length, impl_as_any, invalid_field_err, Decode as _, DecodeResult, ReadCursor};
+use ironrdp_core::{Decode as _, DecodeResult, ReadCursor, cast_length, impl_as_any, invalid_field_err};
 use ironrdp_pdu::{self as pdu, decode_err, encode_err, pdu_other_err};
 use ironrdp_svc::{ChannelFlags, CompressionCondition, SvcMessage, SvcProcessor, SvcServerProcessor};
-use pdu::gcc::ChannelName;
 use pdu::PduResult;
+use pdu::gcc::ChannelName;
 use slab::Slab;
 use tracing::debug;
 
 use crate::pdu::{
     CapabilitiesRequestPdu, CapsVersion, CreateRequestPdu, CreationStatus, DrdynvcClientPdu, DrdynvcServerPdu,
 };
-use crate::{encode_dvc_messages, CompleteData, DvcProcessor};
+use crate::{CompleteData, DvcProcessor, encode_dvc_messages};
 
 pub trait DvcServerProcessor: DvcProcessor {}
 
@@ -48,6 +50,7 @@ impl DynamicChannel {
 /// It adds support for dynamic virtual channels (DVC).
 pub struct DrdynvcServer {
     dynamic_channels: Slab<DynamicChannel>,
+    type_id_to_channel_id: BTreeMap<TypeId, u32>,
 }
 
 impl fmt::Debug for DrdynvcServer {
@@ -71,17 +74,42 @@ impl DrdynvcServer {
     pub fn new() -> Self {
         Self {
             dynamic_channels: Slab::new(),
+            type_id_to_channel_id: BTreeMap::new(),
         }
     }
 
-    // FIXME(#61): it’s likely we want to enable adding dynamic channels at any point during the session (message passing? other approach?)
+    pub fn get_channel_id_by_type<T>(&self) -> Option<u32>
+    where
+        T: DvcServerProcessor + 'static,
+    {
+        self.type_id_to_channel_id.get(&TypeId::of::<T>()).copied()
+    }
 
+    /// Returns `true` if the DVC channel with the given ID has completed
+    /// its creation handshake and is in the `Opened` state.
+    pub fn is_channel_opened(&self, channel_id: u32) -> bool {
+        let Ok(id) = usize::try_from(channel_id) else {
+            return false;
+        };
+        self.dynamic_channels
+            .get(id)
+            .is_some_and(|c| c.state == ChannelState::Opened)
+    }
+
+    /// Registers a dynamic channel with the server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of registered dynamic channels exceeds `u32::MAX`.
     #[must_use]
     pub fn with_dynamic_channel<T>(mut self, channel: T) -> Self
     where
         T: DvcServerProcessor + 'static,
     {
-        self.dynamic_channels.insert(DynamicChannel::new(channel));
+        let id = self.dynamic_channels.insert(DynamicChannel::new(channel));
+        // The slab index is used as the DVC channel ID (a u32).
+        let channel_id = u32::try_from(id).expect("DVC channel count should not exceed u32::MAX");
+        self.type_id_to_channel_id.insert(TypeId::of::<T>(), channel_id);
         self
     }
 
@@ -90,6 +118,27 @@ impl DrdynvcServer {
         self.dynamic_channels
             .get_mut(id)
             .ok_or_else(|| invalid_field_err!("DRDYNVC", "", "invalid channel id"))
+    }
+
+    /// Creates a new DVC, returns CreateRequest PDU to send to client.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of registered dynamic channels exceeds `u32::MAX`.
+    pub fn create_channel<T>(&mut self, channel: T) -> PduResult<SvcMessage>
+    where
+        T: DvcServerProcessor + 'static,
+    {
+        let channel_name = channel.channel_name().into();
+        let mut dvc = DynamicChannel::new(channel);
+        dvc.state = ChannelState::Creation;
+
+        let id = self.dynamic_channels.insert(dvc);
+        // The slab index is used as the DVC channel ID (a u32).
+        let channel_id = u32::try_from(id).expect("DVC channel count should not exceed u32::MAX");
+
+        let req = DrdynvcServerPdu::Create(CreateRequestPdu::new(channel_id, channel_name));
+        as_svc_msg_with_flag(req)
     }
 }
 
@@ -111,7 +160,7 @@ impl SvcProcessor for DrdynvcServer {
     }
 
     fn start(&mut self) -> PduResult<Vec<SvcMessage>> {
-        let cap = CapabilitiesRequestPdu::new(CapsVersion::V1, None);
+        let cap = CapabilitiesRequestPdu::new(CapsVersion::V2, None);
         let req = DrdynvcServerPdu::Capabilities(cap);
         let msg = as_svc_msg_with_flag(req)?;
         Ok(alloc::vec![msg])

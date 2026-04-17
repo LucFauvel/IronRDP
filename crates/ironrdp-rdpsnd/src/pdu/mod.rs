@@ -7,8 +7,8 @@ use std::fmt;
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, other_err, Decode, DecodeError, DecodeResult,
-    Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeError, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length,
+    ensure_fixed_part_size, ensure_size, invalid_field_err, other_err,
 };
 use ironrdp_pdu::{read_padding, write_padding};
 use ironrdp_svc::SvcEncode;
@@ -445,7 +445,7 @@ impl<'de> Decode<'de> for ClientAudioFormatPdu {
     fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let flags = AudioFormatFlags::from_bits_truncate(src.read_u32());
+        let flags = AudioFormatFlags::from_bits_retain(src.read_u32());
         let volume_left = src.read_u16();
         let volume_right = src.read_u16();
         let pitch = src.read_u32();

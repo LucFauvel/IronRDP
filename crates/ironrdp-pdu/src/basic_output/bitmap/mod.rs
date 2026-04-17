@@ -7,8 +7,8 @@ use core::fmt::{self, Debug};
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
-    ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+    ensure_size, invalid_field_err,
 };
 
 use crate::geometry::InclusiveRectangle;
@@ -67,7 +67,7 @@ impl<'de> Decode<'de> for BitmapUpdateData<'de> {
     fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let update_type = BitmapFlags::from_bits_truncate(src.read_u16());
+        let update_type = BitmapFlags::from_bits_retain(src.read_u16());
         if !update_type.contains(BitmapFlags::BITMAP_UPDATE_TYPE) {
             return Err(invalid_field_err!("updateType", "invalid update type"));
         }
@@ -142,7 +142,7 @@ impl<'de> Decode<'de> for BitmapData<'de> {
         let width = src.read_u16();
         let height = src.read_u16();
         let bits_per_pixel = src.read_u16();
-        let compression_flags = Compression::from_bits_truncate(src.read_u16());
+        let compression_flags = Compression::from_bits_retain(src.read_u16());
 
         // A 16-bit, unsigned integer. The size in bytes of the data in the bitmapComprHdr
         // and bitmapDataStream fields.
@@ -222,7 +222,7 @@ impl<'de> Decode<'de> for CompressedDataHeader {
         let main_body_size = src.read_u16();
         let scan_width = src.read_u16();
 
-        if scan_width % 4 != 0 {
+        if !scan_width.is_multiple_of(4) {
             return Err(invalid_field_err!(
                 "cbScanWidth",
                 "The width of the bitmap must be divisible by 4"
@@ -242,7 +242,7 @@ impl Encode for CompressedDataHeader {
     fn encode(&self, dst: &mut WriteCursor<'_>) -> EncodeResult<()> {
         ensure_fixed_part_size!(in: dst);
 
-        if self.scan_width % 4 != 0 {
+        if !self.scan_width.is_multiple_of(4) {
             return Err(invalid_field_err!(
                 "cbScanWidth",
                 "The width of the bitmap must be divisible by 4"
@@ -269,6 +269,8 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct BitmapFlags: u16{
         const BITMAP_UPDATE_TYPE = 0x0001;
+
+        const _ = !0;
     }
 }
 
@@ -277,5 +279,7 @@ bitflags! {
     pub struct Compression: u16 {
        const BITMAP_COMPRESSION = 0x0001;
        const NO_BITMAP_COMPRESSION_HDR = 0x0400;
+
+       const _ = !0;
     }
 }

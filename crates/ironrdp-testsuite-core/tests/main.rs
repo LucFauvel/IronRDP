@@ -12,9 +12,11 @@
 //! Cargo will run all tests from a single binary in parallel, but
 //! binaries themselves are run sequentially.
 
+mod cfg;
 mod clipboard;
 mod displaycontrol;
 mod dvc;
+mod echo;
 mod egfx;
 mod fuzz_regression;
 mod graphics;
@@ -27,3 +29,4 @@ mod rdpsnd;
 mod server;
 mod server_name;
 mod session;
+mod str_types;

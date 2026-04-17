@@ -1,13 +1,14 @@
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, not_enough_bytes_err, other_err, read_padding,
-    write_padding, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+    ensure_size, invalid_field_err, not_enough_bytes_err, other_err, read_padding, write_padding,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
 
 use crate::codecs::rfx::FrameAcknowledgePdu;
 use crate::input::InputEventPdu;
+use crate::rdp::autodetect::{AutoDetectRequest, AutoDetectResponse};
 use crate::rdp::capability_sets::{ClientConfirmActive, ServerDemandActive};
 use crate::rdp::client_info;
 use crate::rdp::finalization_messages::{ControlPdu, FontPdu, MonitorLayoutPdu, SynchronizePdu};
@@ -253,13 +254,7 @@ impl Encode for ShareDataHeader {
 
             write_padding!(dst, 1);
             dst.write_u8(self.stream_priority.as_u8());
-            dst.write_u16(cast_length!(
-                "uncompressedLength",
-                self.share_data_pdu.size()
-                    + PDU_TYPE_FIELD_SIZE
-                    + COMPRESSION_TYPE_FIELD_SIZE
-                    + COMPRESSED_LENGTH_FIELD_SIZE
-            )?);
+            dst.write_u16(cast_length!("uncompressedLength", self.share_data_pdu.size())?);
             dst.write_u8(self.share_data_pdu.share_header_type().as_u8());
             dst.write_u8(compression_flags_with_type);
             dst.write_u16(0); // compressed length
@@ -292,7 +287,7 @@ impl<'de> Decode<'de> for ShareDataHeader {
         let compression_flags_with_type = src.read_u8();
 
         let compression_flags =
-            CompressionFlags::from_bits_truncate(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
+            CompressionFlags::from_bits_retain(compression_flags_with_type & !SHARE_DATA_HEADER_COMPRESSION_MASK);
         let compression_type =
             client_info::CompressionType::from_u8(compression_flags_with_type & SHARE_DATA_HEADER_COMPRESSION_MASK)
                 .ok_or_else(|| invalid_field_err!("compressionType", "Invalid compression type"))?;
@@ -336,6 +331,10 @@ pub enum ShareDataPdu {
     DrawGdiPusErrorPdu(Vec<u8>),
     ArcStatusPdu(Vec<u8>),
     StatusInfoPdu(Vec<u8>),
+    /// Auto-Detect Request (server to client)
+    AutoDetectReq(AutoDetectRequest),
+    /// Auto-Detect Response (client to server)
+    AutoDetectRsp(AutoDetectResponse),
 }
 
 impl ShareDataPdu {
@@ -368,6 +367,8 @@ impl ShareDataPdu {
             ShareDataPdu::DrawGdiPusErrorPdu(_) => "Draw GDI PUS Error PDU",
             ShareDataPdu::ArcStatusPdu(_) => "Arc Status PDU",
             ShareDataPdu::StatusInfoPdu(_) => "Status Info PDU",
+            ShareDataPdu::AutoDetectReq(_) => "Auto-Detect Request PDU",
+            ShareDataPdu::AutoDetectRsp(_) => "Auto-Detect Response PDU",
         }
     }
 
@@ -398,6 +399,7 @@ impl ShareDataPdu {
             ShareDataPdu::DrawGdiPusErrorPdu(_) => ShareDataPduType::DrawGdiPusErrorPdu,
             ShareDataPdu::ArcStatusPdu(_) => ShareDataPduType::ArcStatusPdu,
             ShareDataPdu::StatusInfoPdu(_) => ShareDataPduType::StatusInfoPdu,
+            ShareDataPdu::AutoDetectReq(_) | ShareDataPdu::AutoDetectRsp(_) => ShareDataPduType::AutoDetect,
         }
     }
 
@@ -438,6 +440,15 @@ impl ShareDataPdu {
             ShareDataPduType::DrawGdiPusErrorPdu => Ok(ShareDataPdu::DrawGdiPusErrorPdu(src.remaining().to_vec())),
             ShareDataPduType::ArcStatusPdu => Ok(ShareDataPdu::ArcStatusPdu(src.remaining().to_vec())),
             ShareDataPduType::StatusInfoPdu => Ok(ShareDataPdu::StatusInfoPdu(src.remaining().to_vec())),
+            ShareDataPduType::AutoDetect => {
+                ensure_size!(in: src, size: 2);
+                let type_id = src.remaining()[1];
+                if type_id == crate::rdp::autodetect::TYPE_ID_AUTODETECT_REQUEST {
+                    Ok(ShareDataPdu::AutoDetectReq(AutoDetectRequest::decode(src)?))
+                } else {
+                    Ok(ShareDataPdu::AutoDetectRsp(AutoDetectResponse::decode(src)?))
+                }
+            }
         }
     }
 }
@@ -456,6 +467,8 @@ impl Encode for ShareDataPdu {
             ShareDataPdu::ShutdownRequest | ShareDataPdu::ShutdownDenied => Ok(()),
             ShareDataPdu::SuppressOutput(pdu) => pdu.encode(dst),
             ShareDataPdu::RefreshRectangle(pdu) => pdu.encode(dst),
+            ShareDataPdu::AutoDetectReq(pdu) => pdu.encode(dst),
+            ShareDataPdu::AutoDetectRsp(pdu) => pdu.encode(dst),
             _ => Err(other_err!("Encoding not implemented")),
         }
     }
@@ -489,6 +502,8 @@ impl Encode for ShareDataPdu {
             | ShareDataPdu::DrawGdiPusErrorPdu(buffer)
             | ShareDataPdu::ArcStatusPdu(buffer)
             | ShareDataPdu::StatusInfoPdu(buffer) => buffer.len(),
+            ShareDataPdu::AutoDetectReq(pdu) => pdu.size(),
+            ShareDataPdu::AutoDetectRsp(pdu) => pdu.size(),
         }
     }
 }
@@ -582,6 +597,13 @@ pub enum ShareDataPduType {
     StatusInfoPdu = 0x36,
     MonitorLayoutPdu = 0x37,
     FrameAcknowledgePdu = 0x38,
+    /// Auto-Detect Request or Response ([MS-RDPBCGR 2.2.14]).
+    ///
+    /// The headerTypeId field within the PDU body discriminates direction:
+    /// 0x00 for server-to-client requests, 0x01 for client-to-server responses.
+    ///
+    /// [MS-RDPBCGR 2.2.14]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/dc672839-4f4e-40b1-a71c-cd6a959baa38
+    AutoDetect = 0x3b,
 }
 
 impl ShareDataPduType {
@@ -600,6 +622,8 @@ bitflags! {
         const COMPRESSED = 0x20;
         const AT_FRONT = 0x40;
         const FLUSHED = 0x80;
+
+        const _ = !0;
     }
 }
 
@@ -615,10 +639,14 @@ impl ServerDeactivateAll {
 
 impl Decode<'_> for ServerDeactivateAll {
     fn decode(src: &mut ReadCursor<'_>) -> DecodeResult<Self> {
-        ensure_fixed_part_size!(in: src);
-        let length_source_descriptor = src.read_u16();
-        ensure_size!(in: src, size: length_source_descriptor.into());
-        let _ = src.read_slice(length_source_descriptor.into());
+        // Some servers (notably XRDP and older Windows versions) send a short
+        // Deactivate All PDU without the sourceDescriptor field. FreeRDP
+        // handles this by treating any remaining data as optional.
+        if src.len() >= Self::FIXED_PART_SIZE {
+            let length_source_descriptor = src.read_u16();
+            ensure_size!(in: src, size: length_source_descriptor.into());
+            let _ = src.read_slice(length_source_descriptor.into());
+        }
         Ok(Self)
     }
 }

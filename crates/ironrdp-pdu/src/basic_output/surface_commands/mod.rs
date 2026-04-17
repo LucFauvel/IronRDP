@@ -3,8 +3,8 @@ mod tests;
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult,
-    ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+    ensure_size, invalid_field_err,
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
@@ -233,7 +233,7 @@ impl<'de> Decode<'de> for ExtendedBitmapDataPdu<'de> {
         ensure_fixed_part_size!(in: src);
 
         let bpp = src.read_u8();
-        let flags = BitmapDataFlags::from_bits_truncate(src.read_u8());
+        let flags = BitmapDataFlags::from_bits_retain(src.read_u8());
         let _reserved = src.read_u8();
         let codec_id = src.read_u8();
         let width = src.read_u16();
@@ -371,5 +371,7 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct BitmapDataFlags: u8 {
         const COMPRESSED_BITMAP_HEADER_PRESENT = 0x01;
+
+        const _ = !0;
     }
 }

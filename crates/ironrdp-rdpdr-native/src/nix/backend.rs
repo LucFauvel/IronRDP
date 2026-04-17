@@ -4,11 +4,11 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::MetadataExt;
 
 use ironrdp_core::impl_as_any;
-use ironrdp_pdu::{encode_err, PduResult};
+use ironrdp_pdu::{PduResult, encode_err};
+use ironrdp_rdpdr::RdpdrBackend;
+use ironrdp_rdpdr::pdu::RdpdrPdu;
 use ironrdp_rdpdr::pdu::efs::*;
 use ironrdp_rdpdr::pdu::esc::{ScardCall, ScardIoCtlCode};
-use ironrdp_rdpdr::pdu::RdpdrPdu;
-use ironrdp_rdpdr::RdpdrBackend;
 use ironrdp_svc::SvcMessage;
 use nix::dir::{Dir, OwningIter};
 use tracing::{debug, warn};
@@ -631,14 +631,12 @@ fn make_create_drive_resp(
     file_id: u32,
 ) -> PduResult<Vec<SvcMessage>> {
     let io_response = DeviceIoResponse::new(device_io_request, NtStatus::SUCCESS);
-    let information = match create_disposation {
-        CreateDisposition::FILE_CREATE
-        | CreateDisposition::FILE_SUPERSEDE
-        | CreateDisposition::FILE_OPEN
-        | CreateDisposition::FILE_OVERWRITE => Information::FILE_SUPERSEDED,
-        CreateDisposition::FILE_OPEN_IF => Information::FILE_OPENED,
-        CreateDisposition::FILE_OVERWRITE_IF => Information::FILE_OVERWRITTEN,
-        _ => Information::empty(),
+    let information = if create_disposation == CreateDisposition::FILE_OPEN_IF {
+        Information::FILE_OPENED
+    } else if create_disposation == CreateDisposition::FILE_OVERWRITE_IF {
+        Information::FILE_OVERWRITTEN
+    } else {
+        Information::FILE_SUPERSEDED
     };
     let res = RdpdrPdu::DeviceCreateResponse(DeviceCreateResponse {
         device_io_reply: io_response,

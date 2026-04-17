@@ -5,7 +5,7 @@ use ironrdp_pdu::rdp::capability_sets::CapabilitySet;
 use tracing::{debug, warn};
 
 use crate::{
-    general_err, legacy, Config, ConnectionFinalizationSequence, ConnectorResult, DesktopSize, Sequence, State, Written,
+    Config, ConnectionFinalizationSequence, ConnectorResult, DesktopSize, Sequence, State, Written, general_err, legacy,
 };
 
 /// Represents the Capability Exchange and Connection Finalization phases
@@ -159,6 +159,8 @@ impl Sequence for ConnectionActivationSequence {
                         height: self.config.desktop_size.height,
                     });
 
+                let share_id = share_control_ctx.share_id;
+
                 let client_confirm_active = rdp::headers::ShareControlPdu::ClientConfirmActive(
                     create_client_confirm_active(&self.config, capability_sets, desktop_size),
                 );
@@ -168,7 +170,7 @@ impl Sequence for ConnectionActivationSequence {
                 let written = legacy::encode_share_control(
                     user_channel_id,
                     io_channel_id,
-                    share_control_ctx.share_id,
+                    share_id,
                     client_confirm_active,
                     output,
                 )?;
@@ -179,7 +181,12 @@ impl Sequence for ConnectionActivationSequence {
                         io_channel_id,
                         user_channel_id,
                         desktop_size,
-                        connection_finalization: ConnectionFinalizationSequence::new(io_channel_id, user_channel_id),
+                        share_id,
+                        connection_finalization: ConnectionFinalizationSequence::new(
+                            io_channel_id,
+                            user_channel_id,
+                            share_id,
+                        ),
                     },
                 )
             }
@@ -187,6 +194,7 @@ impl Sequence for ConnectionActivationSequence {
                 io_channel_id,
                 user_channel_id,
                 desktop_size,
+                share_id,
                 mut connection_finalization,
             } => {
                 debug!("Connection Finalization");
@@ -198,6 +206,7 @@ impl Sequence for ConnectionActivationSequence {
                         io_channel_id,
                         user_channel_id,
                         desktop_size,
+                        share_id,
                         connection_finalization,
                     }
                 } else {
@@ -205,6 +214,7 @@ impl Sequence for ConnectionActivationSequence {
                         io_channel_id,
                         user_channel_id,
                         desktop_size,
+                        share_id,
                         enable_server_pointer: self.config.enable_server_pointer,
                         pointer_software_rendering: self.config.pointer_software_rendering,
                     }
@@ -232,12 +242,14 @@ pub enum ConnectionActivationState {
         io_channel_id: u16,
         user_channel_id: u16,
         desktop_size: DesktopSize,
+        share_id: u32,
         connection_finalization: ConnectionFinalizationSequence,
     },
     Finalized {
         io_channel_id: u16,
         user_channel_id: u16,
         desktop_size: DesktopSize,
+        share_id: u32,
         enable_server_pointer: bool,
         pointer_software_rendering: bool,
     },
@@ -270,12 +282,11 @@ fn create_client_confirm_active(
     desktop_size: DesktopSize,
 ) -> rdp::capability_sets::ClientConfirmActive {
     use ironrdp_pdu::rdp::capability_sets::{
-        client_codecs_capabilities, Bitmap, BitmapCache, BitmapDrawingFlags, Brush, CacheDefinition, CacheEntry,
-        ClientConfirmActive, CmdFlags, DemandActive, FrameAcknowledge, General, GeneralExtraFlags, GlyphCache,
-        GlyphSupportLevel, Input, InputFlags, LargePointer, LargePointerSupportFlags, MultifragmentUpdate,
-        OffscreenBitmapCache, Order, OrderFlags, OrderSupportExFlags, Pointer, Sound, SoundFlags, SupportLevel,
-        SurfaceCommands, VirtualChannel, VirtualChannelFlags, BITMAP_CACHE_ENTRIES_NUM, GLYPH_CACHE_NUM,
-        SERVER_CHANNEL_ID,
+        BITMAP_CACHE_ENTRIES_NUM, Bitmap, BitmapCache, BitmapDrawingFlags, Brush, CacheDefinition, CacheEntry,
+        ClientConfirmActive, CmdFlags, DemandActive, FrameAcknowledge, GLYPH_CACHE_NUM, General, GeneralExtraFlags,
+        GlyphCache, GlyphSupportLevel, Input, InputFlags, LargePointer, LargePointerSupportFlags, MultifragmentUpdate,
+        OffscreenBitmapCache, Order, OrderFlags, OrderSupportExFlags, Pointer, SERVER_CHANNEL_ID, Sound, SoundFlags,
+        SupportLevel, SurfaceCommands, VirtualChannel, VirtualChannelFlags, client_codecs_capabilities,
     };
 
     server_capability_sets.retain(|capability_set| matches!(capability_set, CapabilitySet::MultiFragmentUpdate(_)));

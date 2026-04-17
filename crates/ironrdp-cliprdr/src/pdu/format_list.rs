@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
 use ironrdp_core::{
-    cast_int, ensure_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor,
-    WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor, WriteCursor, cast_int, ensure_size,
+    invalid_field_err,
 };
-use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, write_string_to_cursor, CharacterSet};
-use ironrdp_pdu::{decode_err, impl_pdu_borrowing, impl_pdu_pod, PduResult};
+use ironrdp_pdu::utils::{CharacterSet, read_string_from_cursor, to_utf16_bytes, write_string_to_cursor};
+use ironrdp_pdu::{PduResult, decode_err, impl_pdu_borrowing, impl_pdu_pod};
 
 use crate::pdu::{ClipboardPduFlags, PartialHeader};
 
@@ -449,7 +449,7 @@ impl<'de> Decode<'de> for FormatListResponse {
         match header.message_flags {
             ClipboardPduFlags::RESPONSE_OK => Ok(FormatListResponse::Ok),
             ClipboardPduFlags::RESPONSE_FAIL => Ok(FormatListResponse::Fail),
-            _ => Err(invalid_field_err!("msgFlags", "Invalid format list message flags")),
+            _ => Err(invalid_field_err!("msgFlags", "invalid format list message flags")),
         }
     }
 }

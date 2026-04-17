@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use ironrdp_core::{ensure_fixed_part_size, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor};
+use ironrdp_core::{Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, ensure_fixed_part_size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MousePdu {
@@ -58,7 +58,7 @@ impl<'de> Decode<'de> for MousePdu {
 
         let flags_raw = src.read_u16();
 
-        let flags = PointerFlags::from_bits_truncate(flags_raw);
+        let flags = PointerFlags::from_bits_retain(flags_raw);
 
         #[expect(
             clippy::as_conversions,
@@ -95,5 +95,7 @@ bitflags! {
         const RIGHT_BUTTON = 0x2000;
         const MIDDLE_BUTTON_OR_WHEEL = 0x4000;
         const DOWN = 0x8000;
+
+        const _ = !0;
     }
 }

@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check formatting
         run: cargo xtask check fmt -v
@@ -40,10 +40,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./.cargo/local_root/bin
           key: ${{ runner.os }}-bin-${{ github.job }}-${{ hashFiles('xtask/src/bin_version.rs') }}
@@ -72,11 +72,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install devel packages
         if: ${{ runner.os == 'Linux' }}
         run: |
+          sudo apt-get update -qq
           sudo apt-get -y install libasound2-dev
 
       - name: Install NASM
@@ -91,7 +92,7 @@ jobs:
         uses: Swatinem/rust-cache@v2.7.3
 
       - name: Binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./.cargo/local_root/bin
           key: ${{ runner.os }}-bin-${{ github.job }}-${{ hashFiles('xtask/src/bin_version.rs') }}
@@ -122,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.7.3
@@ -130,7 +131,7 @@ jobs:
           workspaces: fuzz -> target
 
       - name: Binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./.cargo/local_root/bin
           key: ${{ runner.os }}-bin-${{ github.job }}-${{ hashFiles('xtask/src/bin_version.rs') }}
@@ -151,13 +152,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.7.3
 
       - name: Binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./.cargo/local_root/bin
           key: ${{ runner.os }}-bin-${{ github.job }}-${{ hashFiles('xtask/src/bin_version.rs') }}
@@ -177,13 +178,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2.7.3
 
       - name: Binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./.cargo/local_root/bin
           key: ${{ runner.os }}-bin-${{ github.job }}-${{ hashFiles('xtask/src/bin_version.rs') }}

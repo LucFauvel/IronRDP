@@ -10,11 +10,11 @@ pub use self::palette::*;
 use std::borrow::Cow;
 
 use ironrdp_core::{
-    cast_int, ensure_fixed_part_size, ensure_size, Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor,
-    WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, IntoOwned, ReadCursor, WriteCursor, cast_int, ensure_fixed_part_size,
+    ensure_size,
 };
 use ironrdp_pdu::impl_pdu_borrowing;
-use ironrdp_pdu::utils::{read_string_from_cursor, to_utf16_bytes, CharacterSet};
+use ironrdp_pdu::utils::{CharacterSet, read_string_from_cursor, to_utf16_bytes};
 
 use super::ClipboardFormatId;
 use crate::pdu::{ClipboardPduFlags, PartialHeader};
@@ -201,6 +201,10 @@ impl<'de> Decode<'de> for FormatDataResponse<'de> {
 
         let is_error = header.message_flags.contains(ClipboardPduFlags::RESPONSE_FAIL);
 
+        // No explicit upper bound on data_length is needed here: the data is
+        // borrowed from the existing PDU buffer (Cow::Borrowed), so no new
+        // allocation occurs. The SVC transport layer already bounds the incoming
+        // buffer size, and ensure_size! rejects payloads shorter than declared.
         ensure_size!(in: src, size: header.data_length());
         let data = src.read_slice(header.data_length());
 

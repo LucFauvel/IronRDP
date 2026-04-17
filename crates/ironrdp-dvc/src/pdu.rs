@@ -2,11 +2,11 @@ use alloc::format;
 use core::fmt;
 
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, unsupported_value_err, Decode, DecodeError,
-    DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeError, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length,
+    ensure_fixed_part_size, ensure_size, invalid_field_err, unsupported_value_err,
 };
 use ironrdp_pdu::utils::{
-    checked_sum, encoded_str_len, read_string_from_cursor, strict_sum, write_string_to_cursor, CharacterSet,
+    CharacterSet, checked_sum, encoded_str_len, read_string_from_cursor, strict_sum, write_string_to_cursor,
 };
 use ironrdp_svc::SvcEncode;
 
@@ -768,6 +768,14 @@ impl CapabilitiesRequestPdu {
     const PRIORITY_CHARGE_SIZE: usize = 2; // 2 bytes for each priority charge
     const PRIORITY_CHARGE_COUNT: usize = 4; // 4 priority charges
     const PRIORITY_CHARGES_SIZE: usize = Self::PRIORITY_CHARGE_COUNT * Self::PRIORITY_CHARGE_SIZE;
+
+    pub fn version(&self) -> CapsVersion {
+        match self {
+            Self::V1 { .. } => CapsVersion::V1,
+            Self::V2 { .. } => CapsVersion::V2,
+            Self::V3 { .. } => CapsVersion::V3,
+        }
+    }
 
     pub fn new(version: CapsVersion, charges: Option<[u16; Self::PRIORITY_CHARGE_COUNT]>) -> Self {
         let header = Header::new(0, 0, Cmd::Capability);

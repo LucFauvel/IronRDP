@@ -178,13 +178,44 @@ This crate is an **API Boundary** (WASM module).
 
 #### [`web-client/iron-remote-desktop`](./web-client/iron-remote-desktop)
 
-Core frontend UI used by `iron-svelte-client` as a Web Component.
+Protocol-agnostic web component and NPM package for remote desktop sessions.
+Used by `iron-svelte-client` as a Web Component.
 
 This crate is an **API Boundary**.
 
+**Architectural Invariant**: `iron-remote-desktop` must remain completely agnostic of any specific
+remote protocol (RDP, VNC, or otherwise). It defines the universal surface for features that are
+meaningful regardless of the underlying protocol: keyboard and mouse input, canvas rendering,
+clipboard text/binary transfer, resize, connection lifecycle, and cursor style.
+
+A method belongs in the base API if **either** of the following is true:
+
+1. **The web component itself needs to call it** to implement transparent, protocol-independent
+   behaviour (e.g., `supportsUnicodeKeyboardShortcuts()` is called internally by the component
+   to adapt keyboard handling, without consumer involvement).
+2. **The feature is universal** — every reasonable remote protocol backend would implement it
+   in a meaningful way (e.g., resize, clipboard text/binary, cursor style).
+
+If neither applies, particularly if the method exposes protocol wire concepts such as PDU
+fields, lock IDs, stream IDs, or protocol-specific flags, it belongs in the backend and must
+be delivered via the extension mechanism.
+
+The extension system works as follows:
+- `Extension` is typed as `unknown`; intentionally opaque at this layer.
+- Backends define their own concrete `Extension` types and factory functions.
+- The consumer calls `userInteraction.configBuilder().withExtension(ext)` or
+  `userInteraction.invokeExtension(ext)` at runtime.
+- `iron-remote-desktop` passes the value through to the backend without inspection.
+- The backend (e.g., `iron-remote-desktop-rdp`) interprets it meaningfully.
+
+See [`web-client/iron-remote-desktop-rdp`](./web-client/iron-remote-desktop-rdp) for a concrete
+example: RDP-specific capabilities such as `preConnectionBlob`, `displayControl`, `kdcProxyUrl`,
+and `enableCredssp` are all delivered as backend extensions, not as base API surface.
+
 #### [`web-client/iron-remote-desktop-rdp`](./web-client/iron-remote-desktop-rdp)
 
-Implementation of the TypeScript interfaces exposed by WebAssembly bindings from `ironrdp-web` and used by `iron-svelte-client`.
+RDP backend for `iron-remote-desktop`. Implements `RemoteDesktopModule` using the WASM bindings
+from `ironrdp-web`, and exposes RDP-specific Extension factory functions.
 
 This crate is an **API Boundary**.
 
@@ -298,6 +329,30 @@ The expectation is that, if `cargo xtask ci` passes locally, the CI will be gree
 
 **Architecture Invariant**: `cargo xtask ci` and CI workflow must be logically equivalents. It must
 be the case that a successful `cargo xtask ci` run implies a successful CI workflow run and vice versa.
+
+### MSRV policy
+
+IronRDP libraries follow a conservative MSRV (Minimum Supported Rust Version) policy.
+
+**Definition**: The MSRV is the oldest of:
+
+- the latest stable Rust release that is at least 6 months old;
+- the Rust version packaged by the [latest Fedora stable release](https://packages.fedoraproject.org/pkgs/rust/rust/); or
+- the Rust version available in [Debian stable-backports](https://packages.debian.org/search?suite=all&arch=any&searchon=names&keywords=rust).
+
+**Toolchain and CI**: The Rust toolchain pinned in `rust-toolchain.toml` is both the project toolchain and the MSRV validated by CI.
+The `rust-version` key in each published crate's `Cargo.toml` is kept in sync with this toolchain version.
+The workspace is compiled once using the pinned toolchain to keep CI efficient; there are no separate CI jobs dedicated to validating older Rust versions.
+
+**Architecture Invariant**: The MSRV is not validated by a separately configured toolchain or a dedicated CI job.
+The pinned toolchain in `rust-toolchain.toml` serves as the single source of truth.
+
+**Bumping the MSRV**: The MSRV may be bumped when:
+
+- a dependency requires a newer version of Rust; or
+- a newer Rust feature offers a clear maintenance, correctness, or performance benefit.
+
+MSRV bumps must be documented in the release notes and must not occur in patch releases.
 
 ### Testing
 

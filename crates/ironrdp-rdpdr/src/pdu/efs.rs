@@ -7,11 +7,11 @@ use core::fmt::{Debug, Display};
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, invalid_field_err_with_source,
-    unsupported_value_err, DecodeError, DecodeResult, EncodeResult, ReadCursor, WriteCursor,
+    DecodeError, DecodeResult, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size, ensure_size,
+    invalid_field_err, invalid_field_err_with_source, unsupported_value_err,
 };
-use ironrdp_pdu::utils::{decode_string, encoded_str_len, from_utf16_bytes, write_string_to_cursor, CharacterSet};
-use ironrdp_pdu::{read_padding, write_padding, PduError};
+use ironrdp_pdu::utils::{CharacterSet, decode_string, encoded_str_len, from_utf16_bytes, write_string_to_cursor};
+use ironrdp_pdu::{PduError, read_padding, write_padding};
 use tracing::error;
 
 use super::esc::rpce;
@@ -92,7 +92,7 @@ impl VersionAndIdPdu {
                     "VersionAndIdPdu::decode",
                     "PacketId",
                     "invalid value"
-                ))
+                ));
             }
         };
 
@@ -248,7 +248,7 @@ impl CoreCapability {
                     "CoreCapability::decode",
                     "PacketId",
                     "invalid value"
-                ))
+                ));
             }
         };
 
@@ -713,6 +713,8 @@ bitflags! {
             | Self::RDPDR_IRP_MJ_DIRECTORY_CONTROL.bits()
             | Self::RDPDR_IRP_MJ_LOCK_CONTROL.bits();
 
+
+        const _ = !0;
     }
 }
 
@@ -727,6 +729,8 @@ bitflags! {
         const RDPDR_CLIENT_DISPLAY_NAME_PDU = 0x0000_0002;
         /// Allow the server to send a Server User Logged On packet.
         const RDPDR_USER_LOGGEDON_PDU = 0x0000_0004;
+
+        const _ = !0;
     }
 }
 
@@ -739,6 +743,8 @@ bitflags! {
         /// Allows the server to send multiple simultaneous read or write requests
         /// on the same file from a redirected file system.
         const ENABLE_ASYNCIO = 0x0000_0001;
+
+        const _ = !0;
     }
 }
 
@@ -1602,7 +1608,7 @@ impl DeviceCreateRequest {
         let allocation_size = src.read_u64();
         let file_attributes = FileAttributes::from_bits_retain(src.read_u32());
         let shared_access = SharedAccess::from_bits_retain(src.read_u32());
-        let create_disposition = CreateDisposition::from_bits_retain(src.read_u32());
+        let create_disposition = CreateDisposition::from(src.read_u32());
         let create_options = CreateOptions::from_bits_retain(src.read_u32());
         let path_length: usize = cast_length!("DeviceCreateRequest", "path_length", src.read_u32())?;
 
@@ -1684,6 +1690,8 @@ bitflags! {
         const GENERIC_WRITE = 0x40000000;
         /// This value indicates a request for the following combination of access flags listed above: FILE_READ_DATA| FILE_READ_ATTRIBUTES| FILE_READ_EA| SYNCHRONIZE| READ_CONTROL.
         const GENERIC_READ = 0x80000000;
+
+        const _ = !0;
     }
 }
 
@@ -1726,24 +1734,41 @@ bitflags! {
         const FILE_SHARE_READ = 0x00000001;
         const FILE_SHARE_WRITE = 0x00000002;
         const FILE_SHARE_DELETE = 0x00000004;
+
+        const _ = !0;
     }
 }
 
-bitflags! {
-    /// Defined in [2.2.13] SMB2 CREATE Request
-    ///
-    /// See FreeRDP's [drive_file.c] for context about how these should be interpreted.
-    ///
-    /// [2.2.13]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/e8fb45c1-a03d-44ca-b7ae-47385cfd7997
-    /// [drive_file.c]: https://github.com/FreeRDP/FreeRDP/blob/511444a65e7aa2f537c5e531fa68157a50c1bd4d/channels/drive/client/drive_file.c#L207
-    #[derive(PartialEq, Eq, Debug, Clone)]
-    pub struct CreateDisposition: u32 {
-        const FILE_SUPERSEDE = 0x00000000;
-        const FILE_OPEN = 0x00000001;
-        const FILE_CREATE = 0x00000002;
-        const FILE_OPEN_IF = 0x00000003;
-        const FILE_OVERWRITE = 0x00000004;
-        const FILE_OVERWRITE_IF = 0x00000005;
+/// Defined in [2.2.13] SMB2 CREATE Request
+///
+/// Mutually exclusive disposition values (0 through 5), not combinable bit flags.
+/// Modeled as a newtype for infallible parsing and round-trip correctness.
+///
+/// See FreeRDP's [drive_file.c] for context about how these should be interpreted.
+///
+/// [2.2.13]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/e8fb45c1-a03d-44ca-b7ae-47385cfd7997
+/// [drive_file.c]: https://github.com/FreeRDP/FreeRDP/blob/511444a65e7aa2f537c5e531fa68157a50c1bd4d/channels/drive/client/drive_file.c#L207
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct CreateDisposition(u32);
+
+impl CreateDisposition {
+    pub const FILE_SUPERSEDE: Self = Self(0x00000000);
+    pub const FILE_OPEN: Self = Self(0x00000001);
+    pub const FILE_CREATE: Self = Self(0x00000002);
+    pub const FILE_OPEN_IF: Self = Self(0x00000003);
+    pub const FILE_OVERWRITE: Self = Self(0x00000004);
+    pub const FILE_OVERWRITE_IF: Self = Self(0x00000005);
+}
+
+impl From<u32> for CreateDisposition {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<CreateDisposition> for u32 {
+    fn from(value: CreateDisposition) -> Self {
+        value.0
     }
 }
 
@@ -1774,6 +1799,8 @@ bitflags! {
         const FILE_OPEN_REPARSE_POINT = 0x00200000;
         const FILE_OPEN_NO_RECALL = 0x00400000;
         const FILE_OPEN_FOR_FREE_SPACE_QUERY = 0x00800000;
+
+        const _ = !0;
     }
 }
 
@@ -1821,6 +1848,8 @@ bitflags! {
         const FILE_OPENED = 0x00000001;
         /// An existing file was overwritten.
         const FILE_OVERWRITTEN = 0x00000003;
+
+        const _ = !0;
     }
 }
 
@@ -2642,7 +2671,7 @@ impl ServerDriveQueryDirectoryRequest {
                     "ServerDriveQueryDirectoryRequest::decode",
                     "file_info_class_lvl",
                     "received invalid level"
-                ))
+                ));
             }
         }
 
@@ -2766,7 +2795,7 @@ impl ServerDriveQueryVolumeInformationRequest {
                     "ServerDriveQueryVolumeInformationRequest::decode",
                     "fs_info_class_lvl",
                     "received invalid level"
-                ))
+                ));
             }
         }
 
@@ -3069,6 +3098,8 @@ bitflags! {
         const FILE_SUPPORT_INTEGRITY_STREAMS = 0x04000000;
         const FILE_SUPPORTS_BLOCK_REFCOUNTING = 0x08000000;
         const FILE_SUPPORTS_SPARSE_VDL = 0x10000000;
+
+        const _ = !0;
     }
 }
 
@@ -3090,6 +3121,8 @@ bitflags! {
         const FILE_CHARACTERISTIC_WEBDAV_DEVICE = 0x00002000;
         const FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL = 0x00020000;
         const FILE_PORTABLE_DEVICE = 0x0004000;
+
+        const _ = !0;
     }
 }
 
@@ -3313,7 +3346,7 @@ impl ServerDriveSetInformationRequest {
                     "ServerDriveSetInformationRequest::decode",
                     "file_information_class_level",
                     "received invalid level"
-                ))
+                ));
             }
         };
 

@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use ironrdp_core::{
-    cast_int, cast_length, ensure_fixed_part_size, ensure_size, invalid_field_err, Decode, DecodeError, DecodeResult,
-    Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_int, cast_length, ensure_fixed_part_size,
+    ensure_size, invalid_field_err,
 };
 use ironrdp_pdu::{impl_pdu_pod, read_padding, write_padding};
 
@@ -46,7 +46,7 @@ impl Capabilities {
 
     pub fn downgrade(&mut self, server_caps: &Self) {
         let client_flags = self.flags();
-        let server_flags = self.flags();
+        let server_flags = server_caps.flags();
 
         let flags = client_flags & server_flags;
         let version = self.version().downgrade(server_caps.version());
@@ -213,20 +213,28 @@ impl<'de> Decode<'de> for GeneralCapabilitySet {
     fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
         ensure_fixed_part_size!(in: src);
 
-        let version: ClipboardProtocolVersion = src.read_u32().try_into()?;
-        let general_flags = ClipboardGeneralCapabilityFlags::from_bits_truncate(src.read_u32());
+        let version: ClipboardProtocolVersion = src.read_u32().into();
+        let general_flags = ClipboardGeneralCapabilityFlags::from_bits_retain(src.read_u32());
 
         Ok(Self { version, general_flags })
     }
 }
 
 /// Specifies the `Remote Desktop Protocol: Clipboard Virtual Channel Extension` version number.
-/// This field is for informational purposes and MUST NOT be used to make protocol capability
-/// decisions. The actual features supported are specified via [`ClipboardGeneralCapabilityFlags`]
+///
+/// Per [MS-RDPECLIP] 2.2.2.1.1.1, this field is for informational purposes and MUST NOT be
+/// used to make protocol capability decisions. The actual features supported are specified
+/// via [`ClipboardGeneralCapabilityFlags`].
+///
+/// Unknown version values are preserved as [`Unknown`](Self::Unknown) to avoid rejecting
+/// Capabilities PDUs from future protocol revisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardProtocolVersion {
     V1,
     V2,
+    /// A version value not recognized by this implementation.
+    /// Preserved for round-trip encoding fidelity.
+    Unknown(u32),
 }
 
 impl ClipboardProtocolVersion {
@@ -247,18 +255,17 @@ impl From<ClipboardProtocolVersion> for u32 {
         match version {
             ClipboardProtocolVersion::V1 => ClipboardProtocolVersion::VERSION_VALUE_V1,
             ClipboardProtocolVersion::V2 => ClipboardProtocolVersion::VERSION_VALUE_V2,
+            ClipboardProtocolVersion::Unknown(value) => value,
         }
     }
 }
 
-impl TryFrom<u32> for ClipboardProtocolVersion {
-    type Error = DecodeError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+impl From<u32> for ClipboardProtocolVersion {
+    fn from(value: u32) -> Self {
         match value {
-            Self::VERSION_VALUE_V1 => Ok(Self::V1),
-            Self::VERSION_VALUE_V2 => Ok(Self::V2),
-            _ => Err(invalid_field_err!("version", "Invalid clipboard capabilities version")),
+            Self::VERSION_VALUE_V1 => Self::V1,
+            Self::VERSION_VALUE_V2 => Self::V2,
+            other => Self::Unknown(other),
         }
     }
 }
@@ -289,5 +296,7 @@ bitflags! {
         /// using the File Contents Request PDU and File Contents
         /// Response PDU.
         const HUGE_FILE_SUPPORT_ENABLED = 0x0000_0020;
+
+        const _ = !0;
     }
 }

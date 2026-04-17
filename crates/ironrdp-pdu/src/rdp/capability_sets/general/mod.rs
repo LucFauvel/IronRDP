@@ -5,7 +5,7 @@ use std::fmt;
 
 use bitflags::bitflags;
 use ironrdp_core::{
-    ensure_fixed_part_size, invalid_field_err, Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor,
+    Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, ensure_fixed_part_size, invalid_field_err,
 };
 
 const GENERAL_LENGTH: usize = 20;
@@ -89,6 +89,8 @@ bitflags! {
         const LONG_CREDENTIALS_SUPPORTED = 0x0004;
         const AUTORECONNECT_SUPPORTED = 0x0008;
         const ENC_SALTED_CHECKSUM = 0x0010;
+
+        const _ = !0;
     }
 }
 
@@ -165,7 +167,7 @@ impl<'de> Decode<'de> for General {
             return Err(invalid_field_err!("compressionTypes", "invalid compression types"));
         }
 
-        let extra_flags = GeneralExtraFlags::from_bits_truncate(src.read_u16());
+        let extra_flags = GeneralExtraFlags::from_bits_retain(src.read_u16());
 
         let update_cap_flags = src.read_u16();
         if update_cap_flags != 0 {
